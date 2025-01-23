@@ -1,0 +1,6 @@
+pandas>=2.0.0
+tqdm>=4.67.1
+pyxlsb>=1.0.10
+typing-extensions>=4.7.1
+openpyxl>=3.1.2
+psycopg2-binary>=2.9.9
