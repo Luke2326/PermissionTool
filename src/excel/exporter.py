@@ -2,8 +2,9 @@ import logging
 from datetime import datetime
 import psycopg2
 import pandas as pd
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import PatternFill, Border, Side, Font, Alignment
+import pyarrow as pa
+import pyarrow.csv as csv
+import xlsxwriter
 from pathlib import Path
 from typing import Dict, List, Generator, Optional
 import concurrent.futures
@@ -56,108 +57,105 @@ def log_info(message: str):
 # Tabelle che verranno gestite separatamente per performance
 LARGE_TABLES = {'permissions', 'set_role_group_version'}
 
-class ExcelWriter:
-    def __init__(self):
-        self.header_style = {
-            'fill': PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid'),
-            'font': Font(color='FFFFFF', bold=True),
-            'border': Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            ),
-            'alignment': Alignment(horizontal='center', vertical='center')
-        }
-        self.main_file = None
-        self.temp_dir = None
-        self.large_files = {}
-
-    def initialize(self, output_path: str):
-        """Inizializza l'ambiente di scrittura"""
-        self.main_file = output_path
-        self.temp_dir = Path(output_path).parent / "temp_excel"
-        self.temp_dir.mkdir(exist_ok=True)
+class Exporter:
+    """
+    Classe ottimizzata per l'export di grandi quantità di dati in Excel.
+    Usa pyarrow per la gestione efficiente dei dati e xlsxwriter per Excel.
+    """
+    
+    def __init__(self, output_file: str):
+        """
+        Inizializza l'exporter
         
-        log_info(f"Inizializzazione ambiente di scrittura in {output_path}")
-        wb = Workbook()
-        wb.save(self.main_file)
-        log_info("File Excel principale creato")
-
-    def _apply_header_style(self, sheet):
-        """Applica stile all'header"""
-        for col in range(1, sheet.max_column + 1):
-            cell = sheet.cell(row=1, column=col)
-            cell.fill = self.header_style['fill']
-            cell.font = self.header_style['font']
-            cell.border = self.header_style['border']
-            cell.alignment = self.header_style['alignment']
-
-    def _optimize_column_widths(self, sheet, sample_size=100):
-        """Ottimizza larghezza colonne"""
-        for col in range(1, sheet.max_column + 1):
-            max_length = 0
-            column = chr(64 + col)
-            
-            # Campiona solo alcune righe
-            for row in range(1, min(sample_size, sheet.max_row + 1)):
-                cell = sheet.cell(row=row, column=col)
-                if cell.value:
-                    max_length = max(max_length, len(str(cell.value)))
-            
-            sheet.column_dimensions[column].width = min(max_length + 2, 50)
-
+        Args:
+            output_file: Percorso del file Excel di output
+        """
+        self.output_file = Path(output_file)
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.workbook = None
+        self.formats = {}
+        self.large_files = {}
+        
+        # Crea il workbook
+        self.workbook = xlsxwriter.Workbook(
+            self.output_file,
+            {
+                'constant_memory': True,
+                'default_date_format': 'yyyy-mm-dd',
+                'remove_timezone': True
+            }
+        )
+        
+        # Definisci i formati
+        self._init_formats()
+    
+    def _init_formats(self):
+        """Inizializza i formati Excel"""
+        self.formats['header'] = self.workbook.add_format({
+            'bold': True,
+            'bg_color': '#E0E0E0',
+            'border': 1
+        })
+        
+        self.formats['date'] = self.workbook.add_format({
+            'num_format': 'yyyy-mm-dd'
+        })
+    
     def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
-        """Scrive il DataFrame nel file appropriato"""
+        """
+        Scrive un DataFrame in un foglio Excel
+        
+        Args:
+            df: DataFrame da scrivere
+            sheet_name: Nome del foglio
+        """
         start_time = time.time()
         total_rows = len(df)
         
         try:
             if sheet_name.lower() in LARGE_TABLES:
-                # Per tabelle grandi (es. Permissions con ~380k righe)
-                csv_file = self.temp_dir / f"{sheet_name}.csv"
-                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in CSV temporaneo...")
+                # Per tabelle grandi, usa pyarrow e file parquet
+                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in formato parquet...")
                 
-                # Scrivi direttamente in CSV
-                df.to_csv(csv_file, index=False)
+                # Converti in tabella pyarrow
+                table = pa.Table.from_pandas(df)
                 
-                self.large_files[sheet_name] = csv_file
-                log_info(f"CSV {sheet_name} completato")
+                # Scrivi in parquet
+                parquet_file = self.temp_dir / f"{sheet_name}.parquet"
+                pa.parquet.write_table(table, parquet_file)
+                
+                self.large_files[sheet_name] = parquet_file
+                log_info(f"File parquet {sheet_name} completato")
                 
                 # Libera memoria
-                del df
+                del df, table
                 gc.collect()
                 
             else:
-                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file principale...")
-                wb = load_workbook(self.main_file)
+                # Per tabelle piccole, scrivi direttamente in Excel
+                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file Excel...")
                 
-                if sheet_name in wb.sheetnames:
-                    wb.remove(wb[sheet_name])
-                
-                sheet = wb.create_sheet(sheet_name)
+                # Crea il foglio
+                worksheet = self.workbook.add_worksheet(sheet_name)
                 
                 # Scrivi header
-                for col, name in enumerate(df.columns, 1):
-                    sheet.cell(row=1, column=col, value=str(name))
+                for col, name in enumerate(df.columns):
+                    worksheet.write(0, col, str(name), self.formats['header'])
+                    worksheet.set_column(col, col, max(len(str(name)) + 2, 12))
                 
-                # Scrivi dati in batch
-                batch_size = 1000
-                for i in range(0, len(df), batch_size):
-                    batch = df.iloc[i:i + batch_size]
-                    for row_idx, row in enumerate(batch.values, i + 2):
-                        for col_idx, value in enumerate(row, 1):
-                            sheet.cell(row=row_idx, column=col_idx, value=value)
+                # Scrivi dati
+                for row_idx, row in enumerate(df.itertuples(index=False), 1):
+                    for col_idx, value in enumerate(row):
+                        if pd.isna(value):
+                            continue
+                        elif isinstance(value, pd.Timestamp):
+                            worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), self.formats['date'])
+                        else:
+                            worksheet.write(row_idx, col_idx, value)
                     
-                    if (i + batch_size) % 10000 == 0:
-                        log_info(f"Scritte {i + batch_size} righe di {total_rows} per {sheet_name}")
+                    if row_idx % 10000 == 0:
+                        log_info(f"Scritte {row_idx} righe di {total_rows} per {sheet_name}")
                         gc.collect()
-                
-                self._apply_header_style(sheet)
-                self._optimize_column_widths(sheet)
-                
-                wb.save(self.main_file)
-                wb.close()
                 
                 # Libera memoria
                 del df
@@ -169,81 +167,66 @@ class ExcelWriter:
         except Exception as e:
             log_info(f"Errore durante la scrittura di {sheet_name}: {str(e)}")
             raise
-
+    
     def finalize(self):
-        """Unisce tutti i file in uno solo"""
+        """Finalizza il file Excel unendo i file parquet"""
         if not self.large_files:
+            self.workbook.close()
             return
 
         log_info("Inizio fase di unione dei file...")
         start_time = time.time()
-
+        
         try:
-            wb = load_workbook(self.main_file)
-            
-            for sheet_name, csv_file in self.large_files.items():
+            # Processa ogni file parquet
+            for sheet_name, parquet_file in self.large_files.items():
                 try:
                     log_info(f"Processando {sheet_name}...")
                     
-                    # Rimuovi il foglio se esiste
-                    if sheet_name in wb.sheetnames:
-                        wb.remove(wb[sheet_name])
+                    # Crea il foglio
+                    worksheet = self.workbook.add_worksheet(sheet_name)
                     
-                    # Crea un nuovo foglio
-                    sheet = wb.create_sheet(sheet_name)
+                    # Leggi il parquet in chunks usando pyarrow
+                    reader = pa.parquet.ParquetFile(parquet_file)
+                    schema = reader.schema
                     
-                    # Leggi il CSV in chunks
-                    chunk_size = 5000
+                    # Scrivi header
+                    for col, field in enumerate(schema.names):
+                        worksheet.write(0, col, str(field), self.formats['header'])
+                        worksheet.set_column(col, col, max(len(str(field)) + 2, 12))
+                    
+                    # Scrivi dati in chunks
                     current_row = 1
-                    header_written = False
-                    
-                    with open(csv_file, 'r') as f:
-                        total_rows = sum(1 for _ in f) - 1  # -1 per header
-                    
-                    log_info(f"Iniziando importazione di {total_rows} righe per {sheet_name}")
-                    
-                    for chunk in pd.read_csv(csv_file, chunksize=chunk_size):
-                        if not header_written:
-                            # Scrivi header
-                            for col, name in enumerate(chunk.columns, 1):
-                                sheet.cell(row=1, column=col, value=str(name))
-                            current_row = 2
-                            header_written = True
+                    for batch in reader.iter_batches(batch_size=50000):
+                        df_chunk = batch.to_pandas()
                         
-                        # Scrivi dati
-                        for _, row in chunk.iterrows():
-                            for col_idx, value in enumerate(row, 1):
-                                try:
-                                    sheet.cell(row=current_row, column=col_idx, value=value)
-                                except Exception as cell_error:
-                                    log_info(f"Errore nella scrittura della cella [{current_row}, {col_idx}]: {str(cell_error)}")
-                                    raise
-                            current_row += 1
+                        for row_idx, row in enumerate(df_chunk.itertuples(index=False), current_row):
+                            for col_idx, value in enumerate(row):
+                                if pd.isna(value):
+                                    continue
+                                elif isinstance(value, pd.Timestamp):
+                                    worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), self.formats['date'])
+                                else:
+                                    worksheet.write(row_idx, col_idx, value)
                         
-                        # Salva e log periodico
+                        current_row += len(df_chunk)
+                        
                         if current_row % 50000 == 0:
-                            log_info(f"Processate {current_row-2} righe di {total_rows} per {sheet_name}")
-                            wb.save(self.main_file)
+                            log_info(f"Processate {current_row-1} righe per {sheet_name}")
                             gc.collect()
+                        
+                        del df_chunk
                     
-                    # Applica stili
-                    self._apply_header_style(sheet)
-                    self._optimize_column_widths(sheet)
-                    
-                    # Salva
-                    log_info(f"Salvataggio foglio {sheet_name}")
-                    wb.save(self.main_file)
-                    
-                    # Rimuovi CSV
-                    os.remove(csv_file)
-                    log_info(f"File CSV {sheet_name} rimosso")
+                    # Rimuovi il file parquet
+                    os.remove(parquet_file)
+                    log_info(f"File parquet {sheet_name} rimosso")
                     
                 except Exception as e:
                     log_info(f"Errore durante l'elaborazione di {sheet_name}: {str(e)}")
                     raise
             
-            # Chiudi workbook
-            wb.close()
+            # Chiudi il workbook
+            self.workbook.close()
             
             # Pulizia directory temporanea
             try:
@@ -258,6 +241,26 @@ class ExcelWriter:
         except Exception as e:
             log_info(f"Errore durante la fase di unione: {str(e)}")
             raise
+    
+    def __del__(self):
+        """Cleanup quando l'oggetto viene distrutto"""
+        try:
+            if self.workbook:
+                self.workbook.close()
+            
+            # Rimuovi file temporanei
+            if self.temp_dir.exists():
+                for file in self.temp_dir.glob('*'):
+                    try:
+                        os.remove(file)
+                    except:
+                        pass
+                try:
+                    os.rmdir(self.temp_dir)
+                except:
+                    pass
+        except:
+            pass
 
 class DatabaseFetcher:
     CHUNK_SIZE = 100000
@@ -372,8 +375,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
 
     try:
         log_info(f"Inizializzazione export per ambiente {environment_name}")
-        excel_writer = ExcelWriter()
-        excel_writer.initialize(output_path)
+        exporter = Exporter(output_path)
 
         total_views = sum(len(db_config["views"]) for db_config in environment_config)
         progress_bar = tqdm(total=total_views, desc="Progresso totale", unit="vista", file=tqdm_logger)
@@ -393,7 +395,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
                         df = fetcher.fetch_view_data(view_name)
                         
                         if not df.empty:
-                            excel_writer.write_dataframe(df, view_name)
+                            exporter.write_dataframe(df, view_name)
                         
                         elapsed_time = time.time() - start_time
                         log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
@@ -422,7 +424,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
                         df = fetcher.fetch_view_data(view_name)
                         
                         if not df.empty:
-                            excel_writer.write_dataframe(df, view_name)
+                            exporter.write_dataframe(df, view_name)
                         
                         elapsed_time = time.time() - start_time
                         log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
@@ -440,7 +442,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
         
         # Fase finale: unione dei file
         log_info("Fase 3: Unione dei file")
-        excel_writer.finalize()
+        exporter.finalize()
         log_info(f"Export completato. File salvato in: {output_path}")
         return output_path
         

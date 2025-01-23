@@ -4,4 +4,5 @@ pyxlsb>=1.0.10
 typing-extensions>=4.7.1
 openpyxl>=3.1.2
 psycopg2-binary>=2.9.9
-xlsxwriter>=3.1.0
+pyarrow>=14.0.1
+xlsxwriter>=3.1.9
