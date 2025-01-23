@@ -210,98 +210,87 @@ class ExcelWriter:
         start_time = time.time()
 
         try:
-            large_file = self.temp_dir / "large_tables.xlsx"
-            with pd.ExcelWriter(large_file, engine='openpyxl') as writer:
-                for sheet_name, csv_file in self.large_files.items():
-                    log_info(f"Processando unione per {sheet_name}...")
-                    
-                    # Conta il numero totale di righe nel CSV
-                    with open(csv_file, 'r') as f:
-                        total_rows = sum(1 for _ in f) - 1  # -1 per l'header
-                    
-                    chunk_size = 10000  # Ridotto per gestire meglio la memoria
-                    chunks_total = (total_rows + chunk_size - 1) // chunk_size
-                    
-                    # Libera memoria prima di iniziare
-                    gc.collect()
-                    
-                    chunks = pd.read_csv(csv_file, chunksize=chunk_size)
-                    first_chunk = True
-                    chunk_num = 0
-                    
-                    with tqdm(total=total_rows, desc=f"Unione {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
-                        for chunk in chunks:
-                            try:
-                                chunk_num += 1
-                                log_info(f"Unione chunk {chunk_num}/{chunks_total} per {sheet_name}")
-                                
-                                if first_chunk:
-                                    chunk.to_excel(writer, sheet_name=sheet_name, index=False)
-                                    first_chunk = False
-                                else:
-                                    chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
-                                
-                                pbar.update(len(chunk))
-                                log_info(f"Chunk {chunk_num}/{chunks_total} unito per {sheet_name}")
-                                
-                                # Libera memoria del chunk
-                                del chunk
-                                gc.collect()
-                                
-                            except Exception as e:
-                                log_info(f"Errore durante l'unione del chunk {chunk_num} per {sheet_name}: {str(e)}")
-                                raise
-
-            log_info("Copiando i fogli nel file principale...")
-            large_wb = load_workbook(large_file, read_only=True)  # Usa read_only per memoria
             main_wb = load_workbook(self.main_file)
-
-            for sheet_name in large_wb.sheetnames:
+            
+            for sheet_name, csv_file in self.large_files.items():
                 try:
-                    log_info(f"Copiando foglio {sheet_name} nel file principale...")
+                    log_info(f"Processando {sheet_name} dal CSV...")
                     
+                    # Rimuovi il foglio se esiste
                     if sheet_name in main_wb.sheetnames:
                         main_wb.remove(main_wb[sheet_name])
                     
-                    source_sheet = large_wb[sheet_name]
-                    new_sheet = main_wb.create_sheet(sheet_name)
+                    # Crea nuovo foglio
+                    sheet = main_wb.create_sheet(sheet_name)
                     
-                    total_rows = sum(1 for _ in source_sheet.rows)  # Conta righe in modo efficiente
+                    # Conta righe nel CSV
+                    with open(csv_file, 'r') as f:
+                        total_rows = sum(1 for _ in f) - 1  # -1 per header
                     
-                    with tqdm(total=total_rows, desc=f"Copia finale {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
-                        for row_idx, row in enumerate(source_sheet.rows, 1):
-                            for cell in row:
-                                new_sheet[cell.coordinate].value = cell.value
-                            if row_idx % 1000 == 0:
-                                log_info(f"Copiate {row_idx} righe di {total_rows} per {sheet_name}")
-                                gc.collect()  # Libera memoria periodicamente
-                            pbar.update(1)
+                    chunk_size = 5000  # Chunk size più piccolo per gestire meglio la memoria
                     
-                    self._apply_header_style(new_sheet)
-                    self._optimize_column_widths(new_sheet)
-                    log_info(f"Foglio {sheet_name} copiato nel file principale")
+                    # Leggi il CSV in chunks
+                    reader = pd.read_csv(csv_file, chunksize=chunk_size)
+                    first_chunk = True
+                    current_row = 1
+                    
+                    with tqdm(total=total_rows, desc=f"Importazione {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
+                        for chunk in reader:
+                            try:
+                                if first_chunk:
+                                    # Scrivi header
+                                    for col, name in enumerate(chunk.columns, 1):
+                                        cell = sheet.cell(row=1, column=col, value=str(name))
+                                    first_chunk = False
+                                    current_row = 2
+                                
+                                # Scrivi dati
+                                for _, row in chunk.iterrows():
+                                    for col, value in enumerate(row, 1):
+                                        cell = sheet.cell(row=current_row, column=col, value=value)
+                                    current_row += 1
+                                    pbar.update(1)
+                                
+                                # Salva periodicamente e libera memoria
+                                if current_row % 50000 == 0:
+                                    log_info(f"Salvataggio intermedio a riga {current_row}")
+                                    main_wb.save(self.main_file)
+                                    gc.collect()
+                                
+                            except Exception as e:
+                                log_info(f"Errore durante l'importazione del chunk per {sheet_name} a riga {current_row}: {str(e)}")
+                                raise
+                    
+                    # Applica stili
+                    self._apply_header_style(sheet)
+                    self._optimize_column_widths(sheet)
+                    
+                    # Salva dopo ogni foglio completato
+                    log_info(f"Salvataggio foglio {sheet_name}")
+                    main_wb.save(self.main_file)
+                    gc.collect()
                     
                 except Exception as e:
-                    log_info(f"Errore durante la copia del foglio {sheet_name}: {str(e)}")
+                    log_info(f"Errore durante l'elaborazione di {sheet_name}: {str(e)}")
                     raise
-
-            # Chiudi i workbook
-            large_wb.close()
-            main_wb.save(self.main_file)
+                finally:
+                    # Pulisci il file CSV anche in caso di errore
+                    try:
+                        os.remove(csv_file)
+                        log_info(f"File CSV temporaneo {sheet_name} rimosso")
+                    except Exception as e:
+                        log_info(f"Errore durante la rimozione del CSV {sheet_name}: {str(e)}")
+            
+            # Chiudi il workbook
             main_wb.close()
             
-            log_info("File principale salvato")
-
-            # Pulizia
+            # Rimuovi la directory temporanea
             try:
-                for csv_file in self.large_files.values():
-                    os.remove(csv_file)
-                os.remove(large_file)
                 os.rmdir(self.temp_dir)
-                log_info("Pulizia file temporanei completata")
+                log_info("Directory temporanea rimossa")
             except Exception as e:
-                log_info(f"Attenzione durante la pulizia: {str(e)}")
-
+                log_info(f"Errore durante la rimozione della directory temporanea: {str(e)}")
+            
             elapsed = time.time() - start_time
             log_info(f"Unione completata in {elapsed:.2f} secondi")
             
