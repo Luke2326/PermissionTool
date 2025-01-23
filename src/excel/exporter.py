@@ -15,11 +15,42 @@ import time
 import sys
 import os
 
+# Configura il logging per essere sempre visibile
+class TqdmToLogger(io.StringIO):
+    logger = None
+    level = None
+    buf = ''
+    def __init__(self, logger, level=None):
+        super(TqdmToLogger, self).__init__()
+        self.logger = logger
+        self.level = level or logging.INFO
+    
+    def write(self, buf):
+        self.buf = buf.strip('\r\n\t ')
+        if self.buf:
+            self.logger.log(self.level, self.buf)
+    
+    def flush(self):
+        if self.buf:
+            self.logger.log(self.level, self.buf)
+        self.buf = ''
+
+# Configura il logger per scrivere su stdout con flush immediato
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
+
+logger = logging.getLogger()
+tqdm_logger = TqdmToLogger(logger, level=logging.INFO)
+
+def log_info(message: str):
+    """Wrapper per logging che forza il flush"""
+    logger.info(message)
+    sys.stdout.flush()
 
 # Tabelle che verranno gestite separatamente per performance
 LARGE_TABLES = {'permissions', 'set_role_group_version'}
@@ -47,9 +78,10 @@ class ExcelWriter:
         self.temp_dir = Path(output_path).parent / "temp_excel"
         self.temp_dir.mkdir(exist_ok=True)
         
-        # Crea il file principale vuoto
+        log_info(f"Inizializzazione ambiente di scrittura in {output_path}")
         wb = Workbook()
         wb.save(self.main_file)
+        log_info("File Excel principale creato")
 
     def _apply_header_style(self, sheet):
         """Applica stile all'header"""
@@ -80,27 +112,31 @@ class ExcelWriter:
         total_rows = len(df)
         
         if sheet_name.lower() in LARGE_TABLES:
-            # Per tabelle grandi, scrivi in un file CSV separato
             csv_file = self.temp_dir / f"{sheet_name}.csv"
-            logging.info(f"Scrittura {sheet_name} in CSV temporaneo...")
+            log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in CSV temporaneo...")
             
-            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe") as pbar:
-                # Scrivi in chunks per mostrare il progresso
-                chunk_size = 50000
+            chunk_size = 50000
+            chunks_total = (total_rows + chunk_size - 1) // chunk_size
+            
+            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
                 for i in range(0, total_rows, chunk_size):
                     chunk = df.iloc[i:i + chunk_size]
+                    chunk_num = i // chunk_size + 1
+                    log_info(f"Processando chunk {chunk_num}/{chunks_total} per {sheet_name}")
+                    
                     if i == 0:
                         chunk.to_csv(csv_file, index=False, mode='w')
                     else:
                         chunk.to_csv(csv_file, index=False, mode='a', header=False)
+                    
                     pbar.update(len(chunk))
+                    log_info(f"Chunk {chunk_num}/{chunks_total} completato per {sheet_name}")
             
             self.large_files[sheet_name] = csv_file
             elapsed = time.time() - start_time
-            logging.info(f"CSV {sheet_name} scritto in {elapsed:.2f} secondi")
+            log_info(f"CSV {sheet_name} completato in {elapsed:.2f} secondi")
         else:
-            # Per tabelle piccole, scrivi direttamente nel file principale
-            logging.info(f"Scrittura {sheet_name} nel file principale...")
+            log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file principale...")
             wb = load_workbook(self.main_file)
             
             if sheet_name in wb.sheetnames:
@@ -113,10 +149,12 @@ class ExcelWriter:
                 cell = sheet.cell(row=1, column=col, value=str(name))
             
             # Scrivi dati con progress bar
-            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe") as pbar:
+            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
                 for row_idx, row in enumerate(df.values, 2):
                     for col_idx, value in enumerate(row, 1):
                         sheet.cell(row=row_idx, column=col_idx, value=value)
+                    if row_idx % 1000 == 0:
+                        log_info(f"Scritte {row_idx-1} righe di {total_rows} per {sheet_name}")
                     pbar.update(1)
             
             self._apply_header_style(sheet)
@@ -124,44 +162,50 @@ class ExcelWriter:
             
             wb.save(self.main_file)
             elapsed = time.time() - start_time
-            logging.info(f"Foglio {sheet_name} scritto in {elapsed:.2f} secondi")
+            log_info(f"Foglio {sheet_name} completato in {elapsed:.2f} secondi")
 
     def finalize(self):
         """Unisce tutti i file in uno solo"""
         if not self.large_files:
             return
 
-        logging.info("Unione dei file in corso...")
+        log_info("Inizio fase di unione dei file...")
         start_time = time.time()
 
-        # Crea un nuovo file Excel con pandas per le tabelle grandi
         large_file = self.temp_dir / "large_tables.xlsx"
         with pd.ExcelWriter(large_file, engine='openpyxl') as writer:
             for sheet_name, csv_file in self.large_files.items():
-                logging.info(f"Processando {sheet_name}...")
+                log_info(f"Processando unione per {sheet_name}...")
                 
-                # Conta il numero totale di righe nel CSV
                 total_rows = sum(1 for _ in open(csv_file)) - 1  # -1 per l'header
+                chunk_size = 50000
+                chunks_total = (total_rows + chunk_size - 1) // chunk_size
                 
-                # Leggi il CSV in chunks per gestire la memoria
-                chunks = pd.read_csv(csv_file, chunksize=50000)
+                chunks = pd.read_csv(csv_file, chunksize=chunk_size)
                 first_chunk = True
+                chunk_num = 0
                 
-                with tqdm(total=total_rows, desc=f"Unione {sheet_name}", unit="righe") as pbar:
+                with tqdm(total=total_rows, desc=f"Unione {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
                     for chunk in chunks:
+                        chunk_num += 1
+                        log_info(f"Unione chunk {chunk_num}/{chunks_total} per {sheet_name}")
+                        
                         if first_chunk:
                             chunk.to_excel(writer, sheet_name=sheet_name, index=False)
                             first_chunk = False
                         else:
                             chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
+                        
                         pbar.update(len(chunk))
+                        log_info(f"Chunk {chunk_num}/{chunks_total} unito per {sheet_name}")
 
-        # Copia i fogli dal file delle tabelle grandi al file principale
-        logging.info("Copiando i fogli nel file principale...")
+        log_info("Copiando i fogli nel file principale...")
         large_wb = load_workbook(large_file)
         main_wb = load_workbook(self.main_file)
 
         for sheet_name in large_wb.sheetnames:
+            log_info(f"Copiando foglio {sheet_name} nel file principale...")
+            
             if sheet_name in main_wb.sheetnames:
                 main_wb.remove(main_wb[sheet_name])
             
@@ -170,17 +214,20 @@ class ExcelWriter:
             
             total_rows = source_sheet.max_row
             
-            # Copia celle con progress bar
-            with tqdm(total=total_rows, desc=f"Copia finale {sheet_name}", unit="righe") as pbar:
-                for row in source_sheet.rows:
+            with tqdm(total=total_rows, desc=f"Copia finale {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
+                for row_idx, row in enumerate(source_sheet.rows, 1):
                     for cell in row:
                         new_sheet[cell.coordinate].value = cell.value
+                    if row_idx % 1000 == 0:
+                        log_info(f"Copiate {row_idx} righe di {total_rows} per {sheet_name}")
                     pbar.update(1)
             
             self._apply_header_style(new_sheet)
             self._optimize_column_widths(new_sheet)
+            log_info(f"Foglio {sheet_name} copiato nel file principale")
 
         main_wb.save(self.main_file)
+        log_info("File principale salvato")
 
         # Pulizia
         try:
@@ -188,11 +235,12 @@ class ExcelWriter:
                 os.remove(csv_file)
             os.remove(large_file)
             os.rmdir(self.temp_dir)
-        except:
-            pass
+            log_info("Pulizia file temporanei completata")
+        except Exception as e:
+            log_info(f"Attenzione durante la pulizia: {str(e)}")
 
         elapsed = time.time() - start_time
-        logging.info(f"Unione completata in {elapsed:.2f} secondi")
+        log_info(f"Unione completata in {elapsed:.2f} secondi")
 
 class DatabaseFetcher:
     CHUNK_SIZE = 100000
@@ -203,13 +251,13 @@ class DatabaseFetcher:
 
     def connect(self) -> bool:
         try:
-            logging.info(f"Connessione al database {self.config.get('database')} su {self.config.get('host')}...")
+            log_info(f"Connessione al database {self.config.get('database')} su {self.config.get('host')}...")
             self.conn = psycopg2.connect(**self.config)
             self.conn.set_session(readonly=True)
-            logging.info("Connessione al database stabilita con successo")
+            log_info("Connessione al database stabilita con successo")
             return True
         except Exception as e:
-            logging.error(f"Errore di connessione al database: {str(e)}")
+            log_info(f"Errore di connessione al database: {str(e)}")
             return False
 
     def _get_optimized_query(self, view_name: str) -> str:
@@ -223,27 +271,27 @@ class DatabaseFetcher:
     def fetch_view_data(self, view_name: str) -> pd.DataFrame:
         """Estrae i dati dalla vista in modo ottimizzato"""
         try:
-            logging.info(f"Inizio estrazione dati dalla vista: {view_name}")
+            log_info(f"Inizio estrazione dati dalla vista: {view_name}")
             start_time = time.time()
             
             # Ottiene il conteggio totale
             count_query = f'SELECT COUNT(*) FROM "{view_name}"'
             total_rows = pd.read_sql_query(count_query, self.conn).iloc[0, 0]
-            logging.info(f"Totale righe da estrarre da {view_name}: {total_rows}")
+            log_info(f"Totale righe da estrarre da {view_name}: {total_rows}")
 
             # Per viste piccole, estrazione diretta
             if total_rows < self.CHUNK_SIZE:
                 query = self._get_optimized_query(view_name)
                 df = pd.read_sql_query(query, self.conn)
                 elapsed_time = time.time() - start_time
-                logging.info(f"Estratte {len(df)} righe da {view_name} in {elapsed_time:.2f} secondi")
+                log_info(f"Estratte {len(df)} righe da {view_name} in {elapsed_time:.2f} secondi")
                 return df
 
             # Per viste grandi, usa COPY per massima performance
             buffer = io.StringIO()
             copy_sql = f'COPY (SELECT * FROM "{view_name}") TO STDOUT WITH CSV HEADER'
             
-            with tqdm(total=total_rows, desc=f"Estrazione {view_name}", unit="righe") as pbar:
+            with tqdm(total=total_rows, desc=f"Estrazione {view_name}", unit="righe", file=tqdm_logger) as pbar:
                 cursor = self.conn.cursor()
                 cursor.copy_expert(copy_sql, buffer)
                 cursor.close()
@@ -254,17 +302,17 @@ class DatabaseFetcher:
                 pbar.update(total_rows)
 
             elapsed_time = time.time() - start_time
-            logging.info(f"Estratte {len(df)} righe da {view_name} in {elapsed_time:.2f} secondi")
+            log_info(f"Estratte {len(df)} righe da {view_name} in {elapsed_time:.2f} secondi")
             return df
 
         except Exception as e:
-            logging.error(f"Errore nell'estrazione dalla vista {view_name}: {str(e)}")
+            log_info(f"Errore nell'estrazione dalla vista {view_name}: {str(e)}")
             return pd.DataFrame()
 
     def close(self):
         if self.conn:
             self.conn.close()
-            logging.info("Connessione al database chiusa")
+            log_info("Connessione al database chiusa")
 
 def export_to_excel(environment_config: Dict, output_path: str = None, environment_name: str = "UNKNOWN") -> str:
     """
@@ -284,9 +332,9 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     try:
         # Crea la directory se non esiste
         base_path.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Directory di output verificata: {base_path}")
+        log_info(f"Directory di output verificata: {base_path}")
     except Exception as e:
-        logging.warning(f"Impossibile creare la directory {base_path}. Uso il percorso locale. Errore: {str(e)}")
+        log_info(f"Impossibile creare la directory {base_path}. Uso il percorso locale. Errore: {str(e)}")
         base_path = Path.cwd()
 
     if output_path is None:
@@ -297,21 +345,21 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
         
         try:
             year_month_path.mkdir(parents=True, exist_ok=True)
-            logging.info(f"Creata directory per anno/mese: {year_month_path}")
+            log_info(f"Creata directory per anno/mese: {year_month_path}")
         except Exception as e:
-            logging.warning(f"Impossibile creare la directory {year_month_path}. Uso il percorso base. Errore: {str(e)}")
+            log_info(f"Impossibile creare la directory {year_month_path}. Uso il percorso base. Errore: {str(e)}")
             year_month_path = base_path
 
         timestamp = current_date.strftime("%Y%m%d_%H%M%S")
         output_path = str(year_month_path / f"export_{environment_name}_{timestamp}.xlsx")
 
     try:
-        logging.info(f"Inizializzazione export per ambiente {environment_name}")
+        log_info(f"Inizializzazione export per ambiente {environment_name}")
         excel_writer = ExcelWriter()
         excel_writer.initialize(output_path)
 
         total_views = sum(len(db_config["views"]) for db_config in environment_config)
-        progress_bar = tqdm(total=total_views, desc="Progresso totale", unit="vista")
+        progress_bar = tqdm(total=total_views, desc="Progresso totale", unit="vista", file=tqdm_logger)
 
         for db_config in environment_config:
             fetcher = DatabaseFetcher(db_config["config"])
@@ -328,7 +376,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
                         excel_writer.write_dataframe(df, view_name)
                     
                     elapsed_time = time.time() - start_time
-                    logging.info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
+                    log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
                     
                     progress_bar.update(1)
                     progress_bar.set_description(f"Completata {view_name}")
@@ -337,12 +385,12 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
 
         progress_bar.close()
         excel_writer.finalize()
-        logging.info(f"Export completato. File salvato in: {output_path}")
+        log_info(f"Export completato. File salvato in: {output_path}")
         return output_path
         
     except PermissionError as e:
-        logging.error(f"Errore di permessi durante il salvataggio in {output_path}. Assicurarsi di avere i permessi necessari.")
+        log_info(f"Errore di permessi durante il salvataggio in {output_path}. Assicurarsi di avere i permessi necessari.")
         raise
     except Exception as e:
-        logging.error(f"Errore durante l'export: {str(e)}")
+        log_info(f"Errore durante l'export: {str(e)}")
         raise
