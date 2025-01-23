@@ -77,12 +77,24 @@ class ExcelWriter:
     def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
         """Scrive il DataFrame nel file appropriato"""
         start_time = time.time()
+        total_rows = len(df)
         
         if sheet_name.lower() in LARGE_TABLES:
             # Per tabelle grandi, scrivi in un file CSV separato
             csv_file = self.temp_dir / f"{sheet_name}.csv"
             logging.info(f"Scrittura {sheet_name} in CSV temporaneo...")
-            df.to_csv(csv_file, index=False)
+            
+            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe") as pbar:
+                # Scrivi in chunks per mostrare il progresso
+                chunk_size = 50000
+                for i in range(0, total_rows, chunk_size):
+                    chunk = df.iloc[i:i + chunk_size]
+                    if i == 0:
+                        chunk.to_csv(csv_file, index=False, mode='w')
+                    else:
+                        chunk.to_csv(csv_file, index=False, mode='a', header=False)
+                    pbar.update(len(chunk))
+            
             self.large_files[sheet_name] = csv_file
             elapsed = time.time() - start_time
             logging.info(f"CSV {sheet_name} scritto in {elapsed:.2f} secondi")
@@ -100,10 +112,12 @@ class ExcelWriter:
             for col, name in enumerate(df.columns, 1):
                 cell = sheet.cell(row=1, column=col, value=str(name))
             
-            # Scrivi dati
-            for row_idx, row in enumerate(df.values, 2):
-                for col_idx, value in enumerate(row, 1):
-                    sheet.cell(row=row_idx, column=col_idx, value=value)
+            # Scrivi dati con progress bar
+            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe") as pbar:
+                for row_idx, row in enumerate(df.values, 2):
+                    for col_idx, value in enumerate(row, 1):
+                        sheet.cell(row=row_idx, column=col_idx, value=value)
+                    pbar.update(1)
             
             self._apply_header_style(sheet)
             self._optimize_column_widths(sheet)
@@ -125,15 +139,22 @@ class ExcelWriter:
         with pd.ExcelWriter(large_file, engine='openpyxl') as writer:
             for sheet_name, csv_file in self.large_files.items():
                 logging.info(f"Processando {sheet_name}...")
+                
+                # Conta il numero totale di righe nel CSV
+                total_rows = sum(1 for _ in open(csv_file)) - 1  # -1 per l'header
+                
                 # Leggi il CSV in chunks per gestire la memoria
                 chunks = pd.read_csv(csv_file, chunksize=50000)
                 first_chunk = True
-                for chunk in chunks:
-                    if first_chunk:
-                        chunk.to_excel(writer, sheet_name=sheet_name, index=False)
-                        first_chunk = False
-                    else:
-                        chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
+                
+                with tqdm(total=total_rows, desc=f"Unione {sheet_name}", unit="righe") as pbar:
+                    for chunk in chunks:
+                        if first_chunk:
+                            chunk.to_excel(writer, sheet_name=sheet_name, index=False)
+                            first_chunk = False
+                        else:
+                            chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
+                        pbar.update(len(chunk))
 
         # Copia i fogli dal file delle tabelle grandi al file principale
         logging.info("Copiando i fogli nel file principale...")
@@ -147,10 +168,14 @@ class ExcelWriter:
             source_sheet = large_wb[sheet_name]
             new_sheet = main_wb.create_sheet(sheet_name)
             
-            # Copia celle
-            for row in source_sheet.rows:
-                for cell in row:
-                    new_sheet[cell.coordinate].value = cell.value
+            total_rows = source_sheet.max_row
+            
+            # Copia celle con progress bar
+            with tqdm(total=total_rows, desc=f"Copia finale {sheet_name}", unit="righe") as pbar:
+                for row in source_sheet.rows:
+                    for cell in row:
+                        new_sheet[cell.coordinate].value = cell.value
+                    pbar.update(1)
             
             self._apply_header_style(new_sheet)
             self._optimize_column_widths(new_sheet)
