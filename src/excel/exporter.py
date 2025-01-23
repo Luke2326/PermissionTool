@@ -16,6 +16,7 @@ import time
 import sys
 import os
 import gc  # Importa il modulo gc per gestione memoria
+import tempfile  # Aggiungendo l'import mancante di tempfile
 
 # Configura il logging per essere sempre visibile
 class TqdmToLogger(io.StringIO):
