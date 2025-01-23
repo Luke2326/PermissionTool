@@ -92,24 +92,53 @@ class Exporter:
     
     def _init_formats(self):
         """Inizializza i formati Excel"""
+        # Formato header: sfondo rosso, testo bianco, bordi
         self.formats['header'] = self.workbook.add_format({
             'bold': True,
-            'bg_color': '#E0E0E0',
-            'border': 1
+            'bg_color': '#FF0000',  # Rosso
+            'font_color': '#FFFFFF',  # Testo bianco
+            'border': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': True
         })
         
+        # Formato base per tutte le celle: bordi e wrap text
+        self.formats['base'] = self.workbook.add_format({
+            'border': 1,
+            'text_wrap': True,
+            'valign': 'top'
+        })
+        
+        # Formato date con bordi
         self.formats['date'] = self.workbook.add_format({
-            'num_format': 'yyyy-mm-dd'
+            'num_format': 'yyyy-mm-dd',
+            'border': 1,
+            'text_wrap': True,
+            'valign': 'top'
         })
-    
-    def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
+
+    def _adjust_column_width(self, worksheet, col_idx, header, data_sample):
         """
-        Scrive un DataFrame in un foglio Excel
+        Calcola la larghezza ottimale per una colonna basandosi sull'header e un campione di dati
+        """
+        # Lunghezza dell'header
+        max_width = len(str(header)) + 2
         
-        Args:
-            df: DataFrame da scrivere
-            sheet_name: Nome del foglio
-        """
+        # Analizza il campione di dati
+        for value in data_sample:
+            if value is not None and pd.notna(value):
+                # Gestisci i valori multi-riga
+                lines = str(value).split('\n')
+                for line in lines:
+                    max_width = max(max_width, len(str(line)) + 2)
+        
+        # Limita la larghezza massima a 100 caratteri
+        max_width = min(max_width, 100)
+        worksheet.set_column(col_idx, col_idx, max_width)
+
+    def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
+        """Scrive un DataFrame in un foglio Excel"""
         start_time = time.time()
         total_rows = len(df)
         
@@ -142,17 +171,22 @@ class Exporter:
                 # Scrivi header
                 for col, name in enumerate(df.columns):
                     worksheet.write(0, col, str(name), self.formats['header'])
-                    worksheet.set_column(col, col, max(len(str(name)) + 2, 12))
+                
+                # Calcola le larghezze delle colonne basandosi su un campione di dati
+                sample_size = min(1000, len(df))
+                for col, name in enumerate(df.columns):
+                    sample_data = df.iloc[:sample_size, col].dropna().astype(str)
+                    self._adjust_column_width(worksheet, col, name, sample_data)
                 
                 # Scrivi dati
                 for row_idx, row in enumerate(df.itertuples(index=False), 1):
                     for col_idx, value in enumerate(row):
                         if pd.isna(value):
-                            continue
+                            worksheet.write(row_idx, col_idx, '', self.formats['base'])
                         elif isinstance(value, pd.Timestamp):
                             worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), self.formats['date'])
                         else:
-                            worksheet.write(row_idx, col_idx, value)
+                            worksheet.write(row_idx, col_idx, value, self.formats['base'])
                     
                     if row_idx % 10000 == 0:
                         log_info(f"Scritte {row_idx} righe di {total_rows} per {sheet_name}")
@@ -168,7 +202,7 @@ class Exporter:
         except Exception as e:
             log_info(f"Errore durante la scrittura di {sheet_name}: {str(e)}")
             raise
-    
+
     def finalize(self):
         """Finalizza il file Excel unendo i file parquet"""
         if not self.large_files:
@@ -191,24 +225,33 @@ class Exporter:
                     reader = pa.parquet.ParquetFile(parquet_file)
                     schema = reader.schema
                     
-                    # Scrivi header
+                    # Scrivi header e inizializza array per le larghezze delle colonne
+                    max_widths = [len(str(field)) + 2 for field in schema.names]
                     for col, field in enumerate(schema.names):
                         worksheet.write(0, col, str(field), self.formats['header'])
-                        worksheet.set_column(col, col, max(len(str(field)) + 2, 12))
                     
                     # Scrivi dati in chunks
                     current_row = 1
                     for batch in reader.iter_batches(batch_size=50000):
                         df_chunk = batch.to_pandas()
                         
+                        # Aggiorna le larghezze massime delle colonne
+                        for col in range(len(schema.names)):
+                            sample_data = df_chunk.iloc[:, col].dropna().astype(str)
+                            for value in sample_data:
+                                lines = str(value).split('\n')
+                                for line in lines:
+                                    max_widths[col] = max(max_widths[col], len(line) + 2)
+                        
+                        # Scrivi i dati
                         for row_idx, row in enumerate(df_chunk.itertuples(index=False), current_row):
                             for col_idx, value in enumerate(row):
                                 if pd.isna(value):
-                                    continue
+                                    worksheet.write(row_idx, col_idx, '', self.formats['base'])
                                 elif isinstance(value, pd.Timestamp):
                                     worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), self.formats['date'])
                                 else:
-                                    worksheet.write(row_idx, col_idx, value)
+                                    worksheet.write(row_idx, col_idx, value, self.formats['base'])
                         
                         current_row += len(df_chunk)
                         
@@ -218,6 +261,10 @@ class Exporter:
                         
                         del df_chunk
                     
+                    # Imposta le larghezze finali delle colonne
+                    for col, width in enumerate(max_widths):
+                        worksheet.set_column(col, col, min(width, 100))
+                    
                     # Rimuovi il file parquet
                     os.remove(parquet_file)
                     log_info(f"File parquet {sheet_name} rimosso")
@@ -225,7 +272,7 @@ class Exporter:
                 except Exception as e:
                     log_info(f"Errore durante l'elaborazione di {sheet_name}: {str(e)}")
                     raise
-            
+
             # Chiudi il workbook
             self.workbook.close()
             
