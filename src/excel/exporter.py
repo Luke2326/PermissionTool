@@ -14,6 +14,7 @@ from queue import Queue
 import time
 import sys
 import os
+import gc  # Importa il modulo gc per gestione memoria
 
 # Configura il logging per essere sempre visibile
 class TqdmToLogger(io.StringIO):
@@ -111,58 +112,94 @@ class ExcelWriter:
         start_time = time.time()
         total_rows = len(df)
         
-        if sheet_name.lower() in LARGE_TABLES:
-            csv_file = self.temp_dir / f"{sheet_name}.csv"
-            log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in CSV temporaneo...")
-            
-            chunk_size = 50000
-            chunks_total = (total_rows + chunk_size - 1) // chunk_size
-            
-            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
-                for i in range(0, total_rows, chunk_size):
-                    chunk = df.iloc[i:i + chunk_size]
-                    chunk_num = i // chunk_size + 1
-                    log_info(f"Processando chunk {chunk_num}/{chunks_total} per {sheet_name}")
-                    
-                    if i == 0:
-                        chunk.to_csv(csv_file, index=False, mode='w')
-                    else:
-                        chunk.to_csv(csv_file, index=False, mode='a', header=False)
-                    
-                    pbar.update(len(chunk))
-                    log_info(f"Chunk {chunk_num}/{chunks_total} completato per {sheet_name}")
-            
-            self.large_files[sheet_name] = csv_file
-            elapsed = time.time() - start_time
-            log_info(f"CSV {sheet_name} completato in {elapsed:.2f} secondi")
-        else:
-            log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file principale...")
-            wb = load_workbook(self.main_file)
-            
-            if sheet_name in wb.sheetnames:
-                wb.remove(wb[sheet_name])
-            
-            sheet = wb.create_sheet(sheet_name)
-            
-            # Scrivi header
-            for col, name in enumerate(df.columns, 1):
-                cell = sheet.cell(row=1, column=col, value=str(name))
-            
-            # Scrivi dati con progress bar
-            with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
-                for row_idx, row in enumerate(df.values, 2):
-                    for col_idx, value in enumerate(row, 1):
-                        sheet.cell(row=row_idx, column=col_idx, value=value)
-                    if row_idx % 1000 == 0:
-                        log_info(f"Scritte {row_idx-1} righe di {total_rows} per {sheet_name}")
-                    pbar.update(1)
-            
-            self._apply_header_style(sheet)
-            self._optimize_column_widths(sheet)
-            
-            wb.save(self.main_file)
-            elapsed = time.time() - start_time
-            log_info(f"Foglio {sheet_name} completato in {elapsed:.2f} secondi")
+        try:
+            if sheet_name.lower() in LARGE_TABLES:
+                csv_file = self.temp_dir / f"{sheet_name}.csv"
+                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in CSV temporaneo...")
+                
+                chunk_size = 10000  # Ridotto per gestire meglio la memoria
+                chunks_total = (total_rows + chunk_size - 1) // chunk_size
+                
+                # Libera memoria
+                gc.collect()
+                
+                with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
+                    for i in range(0, total_rows, chunk_size):
+                        try:
+                            chunk = df.iloc[i:i + chunk_size].copy()  # Crea una copia esplicita
+                            chunk_num = i // chunk_size + 1
+                            log_info(f"Processando chunk {chunk_num}/{chunks_total} per {sheet_name}")
+                            
+                            if i == 0:
+                                chunk.to_csv(csv_file, index=False, mode='w')
+                            else:
+                                chunk.to_csv(csv_file, index=False, mode='a', header=False)
+                            
+                            pbar.update(len(chunk))
+                            log_info(f"Chunk {chunk_num}/{chunks_total} completato per {sheet_name}")
+                            
+                            # Libera memoria del chunk
+                            del chunk
+                            gc.collect()
+                            
+                        except Exception as e:
+                            log_info(f"Errore durante la scrittura del chunk {chunk_num} per {sheet_name}: {str(e)}")
+                            raise
+                
+                self.large_files[sheet_name] = csv_file
+                elapsed = time.time() - start_time
+                log_info(f"CSV {sheet_name} completato in {elapsed:.2f} secondi")
+                
+                # Libera memoria del DataFrame originale
+                del df
+                gc.collect()
+                
+            else:
+                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file principale...")
+                wb = load_workbook(self.main_file)
+                
+                if sheet_name in wb.sheetnames:
+                    wb.remove(wb[sheet_name])
+                
+                sheet = wb.create_sheet(sheet_name)
+                
+                # Scrivi header
+                for col, name in enumerate(df.columns, 1):
+                    cell = sheet.cell(row=1, column=col, value=str(name))
+                
+                # Scrivi dati con progress bar e gestione memoria
+                with tqdm(total=total_rows, desc=f"Scrittura {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
+                    for i in range(0, total_rows, 1000):  # Processa in mini-batch
+                        batch = df.iloc[i:i + 1000]
+                        for row_idx, row in enumerate(batch.values, i + 2):
+                            for col_idx, value in enumerate(row, 1):
+                                sheet.cell(row=row_idx, column=col_idx, value=value)
+                            pbar.update(1)
+                        
+                        if (i + 1000) % 10000 == 0:
+                            log_info(f"Scritte {i + 1000} righe di {total_rows} per {sheet_name}")
+                            gc.collect()  # Libera memoria periodicamente
+                
+                self._apply_header_style(sheet)
+                self._optimize_column_widths(sheet)
+                
+                wb.save(self.main_file)
+                elapsed = time.time() - start_time
+                log_info(f"Foglio {sheet_name} completato in {elapsed:.2f} secondi")
+                
+                # Libera memoria
+                del df
+                gc.collect()
+        
+        except Exception as e:
+            log_info(f"Errore durante la scrittura di {sheet_name}: {str(e)}")
+            # Tenta di liberare memoria in caso di errore
+            try:
+                del df
+                gc.collect()
+            except:
+                pass
+            raise
 
     def finalize(self):
         """Unisce tutti i file in uno solo"""
@@ -172,75 +209,105 @@ class ExcelWriter:
         log_info("Inizio fase di unione dei file...")
         start_time = time.time()
 
-        large_file = self.temp_dir / "large_tables.xlsx"
-        with pd.ExcelWriter(large_file, engine='openpyxl') as writer:
-            for sheet_name, csv_file in self.large_files.items():
-                log_info(f"Processando unione per {sheet_name}...")
-                
-                total_rows = sum(1 for _ in open(csv_file)) - 1  # -1 per l'header
-                chunk_size = 50000
-                chunks_total = (total_rows + chunk_size - 1) // chunk_size
-                
-                chunks = pd.read_csv(csv_file, chunksize=chunk_size)
-                first_chunk = True
-                chunk_num = 0
-                
-                with tqdm(total=total_rows, desc=f"Unione {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
-                    for chunk in chunks:
-                        chunk_num += 1
-                        log_info(f"Unione chunk {chunk_num}/{chunks_total} per {sheet_name}")
-                        
-                        if first_chunk:
-                            chunk.to_excel(writer, sheet_name=sheet_name, index=False)
-                            first_chunk = False
-                        else:
-                            chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
-                        
-                        pbar.update(len(chunk))
-                        log_info(f"Chunk {chunk_num}/{chunks_total} unito per {sheet_name}")
-
-        log_info("Copiando i fogli nel file principale...")
-        large_wb = load_workbook(large_file)
-        main_wb = load_workbook(self.main_file)
-
-        for sheet_name in large_wb.sheetnames:
-            log_info(f"Copiando foglio {sheet_name} nel file principale...")
-            
-            if sheet_name in main_wb.sheetnames:
-                main_wb.remove(main_wb[sheet_name])
-            
-            source_sheet = large_wb[sheet_name]
-            new_sheet = main_wb.create_sheet(sheet_name)
-            
-            total_rows = source_sheet.max_row
-            
-            with tqdm(total=total_rows, desc=f"Copia finale {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
-                for row_idx, row in enumerate(source_sheet.rows, 1):
-                    for cell in row:
-                        new_sheet[cell.coordinate].value = cell.value
-                    if row_idx % 1000 == 0:
-                        log_info(f"Copiate {row_idx} righe di {total_rows} per {sheet_name}")
-                    pbar.update(1)
-            
-            self._apply_header_style(new_sheet)
-            self._optimize_column_widths(new_sheet)
-            log_info(f"Foglio {sheet_name} copiato nel file principale")
-
-        main_wb.save(self.main_file)
-        log_info("File principale salvato")
-
-        # Pulizia
         try:
-            for csv_file in self.large_files.values():
-                os.remove(csv_file)
-            os.remove(large_file)
-            os.rmdir(self.temp_dir)
-            log_info("Pulizia file temporanei completata")
-        except Exception as e:
-            log_info(f"Attenzione durante la pulizia: {str(e)}")
+            large_file = self.temp_dir / "large_tables.xlsx"
+            with pd.ExcelWriter(large_file, engine='openpyxl') as writer:
+                for sheet_name, csv_file in self.large_files.items():
+                    log_info(f"Processando unione per {sheet_name}...")
+                    
+                    # Conta il numero totale di righe nel CSV
+                    with open(csv_file, 'r') as f:
+                        total_rows = sum(1 for _ in f) - 1  # -1 per l'header
+                    
+                    chunk_size = 10000  # Ridotto per gestire meglio la memoria
+                    chunks_total = (total_rows + chunk_size - 1) // chunk_size
+                    
+                    # Libera memoria prima di iniziare
+                    gc.collect()
+                    
+                    chunks = pd.read_csv(csv_file, chunksize=chunk_size)
+                    first_chunk = True
+                    chunk_num = 0
+                    
+                    with tqdm(total=total_rows, desc=f"Unione {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
+                        for chunk in chunks:
+                            try:
+                                chunk_num += 1
+                                log_info(f"Unione chunk {chunk_num}/{chunks_total} per {sheet_name}")
+                                
+                                if first_chunk:
+                                    chunk.to_excel(writer, sheet_name=sheet_name, index=False)
+                                    first_chunk = False
+                                else:
+                                    chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
+                                
+                                pbar.update(len(chunk))
+                                log_info(f"Chunk {chunk_num}/{chunks_total} unito per {sheet_name}")
+                                
+                                # Libera memoria del chunk
+                                del chunk
+                                gc.collect()
+                                
+                            except Exception as e:
+                                log_info(f"Errore durante l'unione del chunk {chunk_num} per {sheet_name}: {str(e)}")
+                                raise
 
-        elapsed = time.time() - start_time
-        log_info(f"Unione completata in {elapsed:.2f} secondi")
+            log_info("Copiando i fogli nel file principale...")
+            large_wb = load_workbook(large_file, read_only=True)  # Usa read_only per memoria
+            main_wb = load_workbook(self.main_file)
+
+            for sheet_name in large_wb.sheetnames:
+                try:
+                    log_info(f"Copiando foglio {sheet_name} nel file principale...")
+                    
+                    if sheet_name in main_wb.sheetnames:
+                        main_wb.remove(main_wb[sheet_name])
+                    
+                    source_sheet = large_wb[sheet_name]
+                    new_sheet = main_wb.create_sheet(sheet_name)
+                    
+                    total_rows = sum(1 for _ in source_sheet.rows)  # Conta righe in modo efficiente
+                    
+                    with tqdm(total=total_rows, desc=f"Copia finale {sheet_name}", unit="righe", file=tqdm_logger) as pbar:
+                        for row_idx, row in enumerate(source_sheet.rows, 1):
+                            for cell in row:
+                                new_sheet[cell.coordinate].value = cell.value
+                            if row_idx % 1000 == 0:
+                                log_info(f"Copiate {row_idx} righe di {total_rows} per {sheet_name}")
+                                gc.collect()  # Libera memoria periodicamente
+                            pbar.update(1)
+                    
+                    self._apply_header_style(new_sheet)
+                    self._optimize_column_widths(new_sheet)
+                    log_info(f"Foglio {sheet_name} copiato nel file principale")
+                    
+                except Exception as e:
+                    log_info(f"Errore durante la copia del foglio {sheet_name}: {str(e)}")
+                    raise
+
+            # Chiudi i workbook
+            large_wb.close()
+            main_wb.save(self.main_file)
+            main_wb.close()
+            
+            log_info("File principale salvato")
+
+            # Pulizia
+            try:
+                for csv_file in self.large_files.values():
+                    os.remove(csv_file)
+                os.remove(large_file)
+                os.rmdir(self.temp_dir)
+                log_info("Pulizia file temporanei completata")
+            except Exception as e:
+                log_info(f"Attenzione durante la pulizia: {str(e)}")
+
+            elapsed = time.time() - start_time
+            log_info(f"Unione completata in {elapsed:.2f} secondi")
+            
+        except Exception as e:
+            log_info(f"Errore durante la fase di unione: {str(e)}")
+            raise
 
 class DatabaseFetcher:
     CHUNK_SIZE = 100000
@@ -361,6 +428,8 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
         total_views = sum(len(db_config["views"]) for db_config in environment_config)
         progress_bar = tqdm(total=total_views, desc="Progresso totale", unit="vista", file=tqdm_logger)
 
+        # Prima elabora tutte le tabelle piccole
+        log_info("Fase 1: Elaborazione tabelle piccole")
         for db_config in environment_config:
             fetcher = DatabaseFetcher(db_config["config"])
             if not fetcher.connect():
@@ -369,21 +438,58 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
 
             try:
                 for view_name in db_config["views"]:
-                    start_time = time.time()
-                    df = fetcher.fetch_view_data(view_name)
-                    
-                    if not df.empty:
-                        excel_writer.write_dataframe(df, view_name)
-                    
-                    elapsed_time = time.time() - start_time
-                    log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
-                    
-                    progress_bar.update(1)
-                    progress_bar.set_description(f"Completata {view_name}")
+                    if view_name.lower() not in LARGE_TABLES:
+                        start_time = time.time()
+                        df = fetcher.fetch_view_data(view_name)
+                        
+                        if not df.empty:
+                            excel_writer.write_dataframe(df, view_name)
+                        
+                        elapsed_time = time.time() - start_time
+                        log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
+                        
+                        progress_bar.update(1)
+                        progress_bar.set_description(f"Completata {view_name}")
+                        
+                        # Forza pulizia memoria
+                        del df
+                        gc.collect()
+            finally:
+                fetcher.close()
+
+        # Poi elabora le tabelle grandi
+        log_info("Fase 2: Elaborazione tabelle grandi")
+        for db_config in environment_config:
+            fetcher = DatabaseFetcher(db_config["config"])
+            if not fetcher.connect():
+                progress_bar.update(len(db_config["views"]))
+                continue
+
+            try:
+                for view_name in db_config["views"]:
+                    if view_name.lower() in LARGE_TABLES:
+                        start_time = time.time()
+                        df = fetcher.fetch_view_data(view_name)
+                        
+                        if not df.empty:
+                            excel_writer.write_dataframe(df, view_name)
+                        
+                        elapsed_time = time.time() - start_time
+                        log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
+                        
+                        progress_bar.update(1)
+                        progress_bar.set_description(f"Completata {view_name}")
+                        
+                        # Forza pulizia memoria
+                        del df
+                        gc.collect()
             finally:
                 fetcher.close()
 
         progress_bar.close()
+        
+        # Fase finale: unione dei file
+        log_info("Fase 3: Unione dei file")
         excel_writer.finalize()
         log_info(f"Export completato. File salvato in: {output_path}")
         return output_path
