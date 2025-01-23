@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 import psycopg2
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 from openpyxl.styles import PatternFill, Border, Side, Font, Alignment
 from pathlib import Path
 from typing import Dict, List, Generator, Optional
@@ -13,19 +13,18 @@ import threading
 from queue import Queue
 import time
 import sys
+import os
 
-# Configura il logging per mostrare sempre l'output
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-class ExcelWriter:
-    CHUNK_SIZE = 100000
+# Tabelle che verranno gestite separatamente per performance
+LARGE_TABLES = {'permissions', 'set_role_group_version'}
 
+class ExcelWriter:
     def __init__(self):
         self.header_style = {
             'fill': PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid'),
@@ -38,28 +37,22 @@ class ExcelWriter:
             ),
             'alignment': Alignment(horizontal='center', vertical='center')
         }
+        self.main_file = None
+        self.temp_dir = None
+        self.large_files = {}
+
+    def initialize(self, output_path: str):
+        """Inizializza l'ambiente di scrittura"""
+        self.main_file = output_path
+        self.temp_dir = Path(output_path).parent / "temp_excel"
+        self.temp_dir.mkdir(exist_ok=True)
         
-        self.cell_style = {
-            'border': Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
-        }
-        self.output_file = None
+        # Crea il file principale vuoto
+        wb = Workbook()
+        wb.save(self.main_file)
 
-    def create_excel(self, output_path: str):
-        self.output_file = output_path
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            pd.DataFrame().to_excel(writer)
-
-    def _apply_styles(self, sheet_name: str):
-        """Applica gli stili dopo la scrittura dei dati"""
-        wb = load_workbook(self.output_file)
-        sheet = wb[sheet_name]
-
-        # Applica stili all'header
+    def _apply_header_style(self, sheet):
+        """Applica stile all'header"""
         for col in range(1, sheet.max_column + 1):
             cell = sheet.cell(row=1, column=col)
             cell.fill = self.header_style['fill']
@@ -67,106 +60,114 @@ class ExcelWriter:
             cell.border = self.header_style['border']
             cell.alignment = self.header_style['alignment']
 
-        # Ottimizza larghezze colonne
+    def _optimize_column_widths(self, sheet, sample_size=100):
+        """Ottimizza larghezza colonne"""
         for col in range(1, sheet.max_column + 1):
             max_length = 0
             column = chr(64 + col)
             
-            # Campiona solo alcune righe per la larghezza
-            for row in range(1, min(1000, sheet.max_row + 1)):
+            # Campiona solo alcune righe
+            for row in range(1, min(sample_size, sheet.max_row + 1)):
                 cell = sheet.cell(row=row, column=col)
                 if cell.value:
                     max_length = max(max_length, len(str(cell.value)))
             
-            adjusted_width = min(max_length + 2, 50)
-            sheet.column_dimensions[column].width = adjusted_width
-
-        wb.save(self.output_file)
-
-    def write_large_dataframe(self, df: pd.DataFrame, sheet_name: str):
-        """Metodo ottimizzato per scrivere grandi DataFrame"""
-        logging.info(f"Inizio scrittura foglio grande: {sheet_name}")
-        start_time = time.time()
-
-        # Usa xlsxwriter per performance migliori su grandi dataset
-        temp_file = self.output_file.replace('.xlsx', f'_{sheet_name}_temp.xlsx')
-        
-        # Scrivi senza formattazione
-        df.to_excel(
-            temp_file,
-            sheet_name=sheet_name,
-            index=False,
-            engine='xlsxwriter'
-        )
-        
-        logging.info(f"Dati base scritti per {sheet_name}, unisco al file principale...")
-        
-        # Copia il foglio nel file principale
-        temp_wb = load_workbook(temp_file)
-        temp_sheet = temp_wb[sheet_name]
-        
-        main_wb = load_workbook(self.output_file)
-        if sheet_name in main_wb.sheetnames:
-            main_wb.remove(main_wb[sheet_name])
-        
-        main_wb.create_sheet(sheet_name)
-        main_sheet = main_wb[sheet_name]
-        
-        # Copia i dati
-        for row in temp_sheet.rows:
-            for cell in row:
-                main_sheet[cell.coordinate].value = cell.value
-        
-        # Applica stili solo all'header
-        for col in range(1, main_sheet.max_column + 1):
-            cell = main_sheet.cell(row=1, column=col)
-            cell.fill = self.header_style['fill']
-            cell.font = self.header_style['font']
-            cell.border = self.header_style['border']
-            cell.alignment = self.header_style['alignment']
-        
-        # Ottimizza larghezze colonne (solo campione)
-        for col in range(1, main_sheet.max_column + 1):
-            max_length = 0
-            column = chr(64 + col)
-            
-            # Campiona solo le prime 100 righe per la larghezza
-            for row in range(1, min(100, main_sheet.max_row + 1)):
-                cell = main_sheet.cell(row=row, column=col)
-                if cell.value:
-                    max_length = max(max_length, len(str(cell.value)))
-            
-            adjusted_width = min(max_length + 2, 50)
-            main_sheet.column_dimensions[column].width = adjusted_width
-        
-        main_wb.save(self.output_file)
-        
-        # Pulisci il file temporaneo
-        try:
-            Path(temp_file).unlink()
-        except:
-            pass
-        
-        elapsed_time = time.time() - start_time
-        logging.info(f"Scrittura foglio {sheet_name} completata in {elapsed_time:.2f} secondi")
+            sheet.column_dimensions[column].width = min(max_length + 2, 50)
 
     def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
-        """Scrive il DataFrame nel foglio Excel"""
-        # Se il DataFrame è grande, usa il metodo ottimizzato
-        if len(df) > 100000 or sheet_name.lower() in ['permissions', 'set_role_group_version']:
-            self.write_large_dataframe(df, sheet_name)
+        """Scrive il DataFrame nel file appropriato"""
+        start_time = time.time()
+        
+        if sheet_name.lower() in LARGE_TABLES:
+            # Per tabelle grandi, scrivi in un file CSV separato
+            csv_file = self.temp_dir / f"{sheet_name}.csv"
+            logging.info(f"Scrittura {sheet_name} in CSV temporaneo...")
+            df.to_csv(csv_file, index=False)
+            self.large_files[sheet_name] = csv_file
+            elapsed = time.time() - start_time
+            logging.info(f"CSV {sheet_name} scritto in {elapsed:.2f} secondi")
+        else:
+            # Per tabelle piccole, scrivi direttamente nel file principale
+            logging.info(f"Scrittura {sheet_name} nel file principale...")
+            wb = load_workbook(self.main_file)
+            
+            if sheet_name in wb.sheetnames:
+                wb.remove(wb[sheet_name])
+            
+            sheet = wb.create_sheet(sheet_name)
+            
+            # Scrivi header
+            for col, name in enumerate(df.columns, 1):
+                cell = sheet.cell(row=1, column=col, value=str(name))
+            
+            # Scrivi dati
+            for row_idx, row in enumerate(df.values, 2):
+                for col_idx, value in enumerate(row, 1):
+                    sheet.cell(row=row_idx, column=col_idx, value=value)
+            
+            self._apply_header_style(sheet)
+            self._optimize_column_widths(sheet)
+            
+            wb.save(self.main_file)
+            elapsed = time.time() - start_time
+            logging.info(f"Foglio {sheet_name} scritto in {elapsed:.2f} secondi")
+
+    def finalize(self):
+        """Unisce tutti i file in uno solo"""
+        if not self.large_files:
             return
 
-        logging.info(f"Inizio scrittura foglio: {sheet_name}")
+        logging.info("Unione dei file in corso...")
         start_time = time.time()
 
-        with pd.ExcelWriter(self.output_file, engine='openpyxl', mode='a') as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
+        # Crea un nuovo file Excel con pandas per le tabelle grandi
+        large_file = self.temp_dir / "large_tables.xlsx"
+        with pd.ExcelWriter(large_file, engine='openpyxl') as writer:
+            for sheet_name, csv_file in self.large_files.items():
+                logging.info(f"Processando {sheet_name}...")
+                # Leggi il CSV in chunks per gestire la memoria
+                chunks = pd.read_csv(csv_file, chunksize=50000)
+                first_chunk = True
+                for chunk in chunks:
+                    if first_chunk:
+                        chunk.to_excel(writer, sheet_name=sheet_name, index=False)
+                        first_chunk = False
+                    else:
+                        chunk.to_excel(writer, sheet_name=sheet_name, startrow=writer.sheets[sheet_name].max_row + 1, header=False, index=False)
 
-        self._apply_styles(sheet_name)
+        # Copia i fogli dal file delle tabelle grandi al file principale
+        logging.info("Copiando i fogli nel file principale...")
+        large_wb = load_workbook(large_file)
+        main_wb = load_workbook(self.main_file)
 
-        elapsed_time = time.time() - start_time
-        logging.info(f"Scrittura foglio {sheet_name} completata in {elapsed_time:.2f} secondi")
+        for sheet_name in large_wb.sheetnames:
+            if sheet_name in main_wb.sheetnames:
+                main_wb.remove(main_wb[sheet_name])
+            
+            source_sheet = large_wb[sheet_name]
+            new_sheet = main_wb.create_sheet(sheet_name)
+            
+            # Copia celle
+            for row in source_sheet.rows:
+                for cell in row:
+                    new_sheet[cell.coordinate].value = cell.value
+            
+            self._apply_header_style(new_sheet)
+            self._optimize_column_widths(new_sheet)
+
+        main_wb.save(self.main_file)
+
+        # Pulizia
+        try:
+            for csv_file in self.large_files.values():
+                os.remove(csv_file)
+            os.remove(large_file)
+            os.rmdir(self.temp_dir)
+        except:
+            pass
+
+        elapsed = time.time() - start_time
+        logging.info(f"Unione completata in {elapsed:.2f} secondi")
 
 class DatabaseFetcher:
     CHUNK_SIZE = 100000
@@ -282,7 +283,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     try:
         logging.info(f"Inizializzazione export per ambiente {environment_name}")
         excel_writer = ExcelWriter()
-        excel_writer.create_excel(output_path)
+        excel_writer.initialize(output_path)
 
         total_views = sum(len(db_config["views"]) for db_config in environment_config)
         progress_bar = tqdm(total=total_views, desc="Progresso totale", unit="vista")
@@ -310,6 +311,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
                 fetcher.close()
 
         progress_bar.close()
+        excel_writer.finalize()
         logging.info(f"Export completato. File salvato in: {output_path}")
         return output_path
         
