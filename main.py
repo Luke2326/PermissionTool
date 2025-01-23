@@ -53,7 +53,7 @@ def extract_data():
 
         # Export database state to Excel
         print("\nEstrazione dati in corso...")
-        export_path = export_to_excel(ENVIRONMENTS[env_choice])
+        export_path = export_to_excel(ENVIRONMENTS[env_choice], environment_name=env_choice)
         print(f"\nDati esportati nel file: {export_path}")
         return True
 
@@ -71,8 +71,8 @@ def show_menu():
         print("2. Estrai dati dal database")
         print("3. Esci")
         
-        choice = input("\nScegli operazione (1-4): ")
-        if choice in ['1', '2', '3', '4']:
+        choice = input("\nScegli operazione (1-3): ")
+        if choice in ['1', '2', '3']:
             return choice
         print("\n✗ Scelta non valida. Seleziona un numero tra 1 e 4.")
 
