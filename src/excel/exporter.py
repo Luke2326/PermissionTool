@@ -99,14 +99,12 @@ class Exporter:
             'font_color': '#FFFFFF',  # Testo bianco
             'border': 1,
             'align': 'center',
-            'valign': 'vcenter',
-            'text_wrap': True
+            'valign': 'vcenter'
         })
         
-        # Formato base per tutte le celle: bordi e wrap text
+        # Formato base per tutte le celle: bordi
         self.formats['base'] = self.workbook.add_format({
             'border': 1,
-            'text_wrap': True,
             'valign': 'top'
         })
         
@@ -114,7 +112,6 @@ class Exporter:
         self.formats['date'] = self.workbook.add_format({
             'num_format': 'yyyy-mm-dd',
             'border': 1,
-            'text_wrap': True,
             'valign': 'top'
         })
 
