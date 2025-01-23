@@ -7,57 +7,95 @@ from src.excel.exporter import export_to_excel
 from src.utils.helpers import setup_logging, validate_file_path, extract_id_from_path
 from config.constants import ENVIRONMENTS, OUTPUT_DIR
 
-def main():
+def generate_queries():
+    """Funzione per generare le query SQL da un file Excel"""
     try:
-        # Setup logging
-        setup_logging()
-        
-        # Get the input file path from user
-        file_path = input("Inserisci il percorso del file Excel: ").strip()
-        
-        # Validate input file
-        validate_file_path(file_path)
-        
+        # Get the Excel file path from user
+        excel_path = input("\nInserisci il percorso del file Excel: ")
+        if not Path(excel_path).exists():
+            raise FileNotFoundError(f"File Excel non trovato in: {excel_path}")
+
         # Extract ID from filename if present
-        id = extract_id_from_path(file_path)
-        
-        # Step 1: Read the Excel file
-        logging.info("Lettura del file Excel...")
-        excel_reader = ExcelReader(file_path)
-        sheets_data = excel_reader.read_excel_file()
-        
-        if not sheets_data:
+        file_id = extract_id_from_path(excel_path)
+
+        # Read Excel data
+        print("\nLettura del file Excel in corso...")
+        excel_reader = ExcelReader(excel_path)
+        excel_reader.validate_sheets()  # Validate required sheets exist
+        data = excel_reader.read_all_sheets()  # Read all sheets in parallel
+
+        if not data:
             raise ValueError("Nessun dato valido trovato nel file Excel")
-        
-        # Step 2: Generate queries
-        logging.info("Generazione delle query...")
-        query_gen = QueryGenerator(sheets_data, file_path, id)
-        query_gen.generate_all_queries()
-        output_file = query_gen.save_queries()
-        
+
+        # Generate queries
+        print("\nGenerazione delle query in corso...")
+        query_generator = QueryGenerator(data, excel_path, file_id)
+        query_generator.generate_all_queries()
+        output_file = query_generator.save_queries()
+
+        print(f"\nQuery salvate nel file: {output_file}")
         logging.info(f"Query generate con successo nel file: {output_file}")
+        return True
         
-        # Ask user if they want to export current database state
+    except Exception as e:
+        logging.error(f"Si è verificato un errore durante la generazione delle query: {str(e)}")
+        return False
+
+def extract_data():
+    """Funzione per estrarre i dati dal database"""
+    try:
         while True:
-            export_choice = input("\nVuoi esportare lo stato attuale del database? (si/no): ").lower()
-            if export_choice in ['si', 'no']:
+            print(f"\nAmbienti disponibili: {', '.join(ENVIRONMENTS.keys())}")
+            env_choice = input("Seleziona ambiente: ").upper()
+            if env_choice in ENVIRONMENTS:
                 break
-            print("Per favore, inserisci 'si' o 'no'")
+            print(f"\nAmbiente non valido. Scegli tra: {', '.join(ENVIRONMENTS.keys())}")
 
-        if export_choice == 'si':
-            while True:
-                env_choice = input(f"\nSeleziona ambiente ({', '.join(ENVIRONMENTS.keys())}): ").upper()
-                if env_choice in ENVIRONMENTS:
-                    break
-                print(f"Per favore, seleziona un ambiente valido: {', '.join(ENVIRONMENTS.keys())}")
-
-            # Export database state to Excel
-            export_path = export_to_excel(ENVIRONMENTS[env_choice])
-            print(f"\nStato del database esportato in: {export_path}")
+        # Export database state to Excel
+        print("\nEstrazione dati in corso...")
+        export_path = export_to_excel(ENVIRONMENTS[env_choice])
+        print(f"\nDati esportati nel file: {export_path}")
+        return True
 
     except Exception as e:
-        logging.error(f"Si è verificato un errore: {str(e)}")
-        raise
+        logging.error(f"Si è verificato un errore durante l'estrazione dei dati: {str(e)}")
+        return False
+
+def show_menu():
+    """Mostra il menu principale e restituisce la scelta dell'utente"""
+    while True:
+        print("\n=== Prometheus Query Generator ===")
+        print("=================================")
+        print("\nOperazioni disponibili:")
+        print("1. Genera query SQL da file Excel")
+        print("2. Estrai dati dal database")
+        print("3. Esci")
+        
+        choice = input("\nScegli operazione (1-4): ")
+        if choice in ['1', '2', '3', '4']:
+            return choice
+        print("\n✗ Scelta non valida. Seleziona un numero tra 1 e 4.")
+
+def main():
+    setup_logging()
+    
+    while True:
+        choice = show_menu()
+        
+        if choice == '1':  # Solo generazione query
+            if generate_queries():
+                print("\n✓ Generazione query completata con successo!")
+            else:
+                print("\n✗ Si è verificato un errore durante la generazione delle query.")
+                
+        elif choice == '2':  # Solo estrazione dati
+            if extract_data():
+                print("\n✓ Estrazione dati completata con successo!")
+            else:
+                print("\n✗ Si è verificato un errore durante l'estrazione dei dati.")
+        else:  # Esci
+            print("\nGrazie per aver utilizzato Prometheus Query Generator!")
+            break
 
 if __name__ == "__main__":
     main()
