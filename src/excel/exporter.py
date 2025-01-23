@@ -114,51 +114,50 @@ class ExcelWriter:
         
         try:
             if sheet_name.lower() in LARGE_TABLES:
-                # Per tabelle grandi (es. Permissions con ~380k righe), usiamo un approccio a stream
+                # Per tabelle grandi (es. Permissions con ~380k righe)
                 csv_file = self.temp_dir / f"{sheet_name}.csv"
                 log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in CSV temporaneo...")
                 
-                # Usa il metodo più veloce di pandas per scrivere CSV
-                df.to_csv(csv_file, index=False, mode='w', chunksize=50000)
-                
-                # Libera subito la memoria
-                del df
-                gc.collect()
+                # Scrivi direttamente in CSV
+                df.to_csv(csv_file, index=False)
                 
                 self.large_files[sheet_name] = csv_file
                 log_info(f"CSV {sheet_name} completato")
                 
+                # Libera memoria
+                del df
+                gc.collect()
+                
             else:
-                # Per le tabelle piccole, usa xlsxwriter che è più efficiente
                 log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file principale...")
-                
-                # Usa un nuovo workbook temporaneo per questo sheet
-                temp_file = self.temp_dir / f"temp_{sheet_name}.xlsx"
-                with pd.ExcelWriter(temp_file, engine='xlsxwriter') as writer:
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-                
-                # Ora copia il foglio nel file principale
                 wb = load_workbook(self.main_file)
-                temp_wb = load_workbook(temp_file)
                 
                 if sheet_name in wb.sheetnames:
                     wb.remove(wb[sheet_name])
                 
-                # Copia il foglio
-                wb.create_sheet(sheet_name)
-                wb[sheet_name] = temp_wb[sheet_name]
+                sheet = wb.create_sheet(sheet_name)
                 
-                # Applica stili
-                self._apply_header_style(wb[sheet_name])
-                self._optimize_column_widths(wb[sheet_name])
+                # Scrivi header
+                for col, name in enumerate(df.columns, 1):
+                    sheet.cell(row=1, column=col, value=str(name))
                 
-                # Salva e chiudi
+                # Scrivi dati in batch
+                batch_size = 1000
+                for i in range(0, len(df), batch_size):
+                    batch = df.iloc[i:i + batch_size]
+                    for row_idx, row in enumerate(batch.values, i + 2):
+                        for col_idx, value in enumerate(row, 1):
+                            sheet.cell(row=row_idx, column=col_idx, value=value)
+                    
+                    if (i + batch_size) % 10000 == 0:
+                        log_info(f"Scritte {i + batch_size} righe di {total_rows} per {sheet_name}")
+                        gc.collect()
+                
+                self._apply_header_style(sheet)
+                self._optimize_column_widths(sheet)
+                
                 wb.save(self.main_file)
                 wb.close()
-                temp_wb.close()
-                
-                # Rimuovi il file temporaneo
-                os.remove(temp_file)
                 
                 # Libera memoria
                 del df
@@ -193,49 +192,60 @@ class ExcelWriter:
                     # Crea un nuovo foglio
                     sheet = wb.create_sheet(sheet_name)
                     
-                    # Leggi il CSV in chunks per evitare problemi di memoria
-                    chunk_size = 5000  # Chunk size ottimizzato per ~380k righe
-                    row_idx = 1
-                    header = True
+                    # Leggi il CSV in chunks
+                    chunk_size = 5000
+                    current_row = 1
+                    header_written = False
+                    
+                    with open(csv_file, 'r') as f:
+                        total_rows = sum(1 for _ in f) - 1  # -1 per header
+                    
+                    log_info(f"Iniziando importazione di {total_rows} righe per {sheet_name}")
                     
                     for chunk in pd.read_csv(csv_file, chunksize=chunk_size):
-                        if header:
+                        if not header_written:
                             # Scrivi header
                             for col, name in enumerate(chunk.columns, 1):
                                 sheet.cell(row=1, column=col, value=str(name))
-                            header = False
-                            row_idx = 2
+                            current_row = 2
+                            header_written = True
                         
-                        # Scrivi chunk
+                        # Scrivi dati
                         for _, row in chunk.iterrows():
                             for col_idx, value in enumerate(row, 1):
-                                sheet.cell(row=row_idx, column=col_idx, value=value)
-                            row_idx += 1
+                                try:
+                                    sheet.cell(row=current_row, column=col_idx, value=value)
+                                except Exception as cell_error:
+                                    log_info(f"Errore nella scrittura della cella [{current_row}, {col_idx}]: {str(cell_error)}")
+                                    raise
+                            current_row += 1
                         
-                        # Log e pulizia memoria ogni 50k righe
-                        if row_idx % 50000 == 0:
-                            log_info(f"Processate {row_idx-2} righe di {sheet_name}")
+                        # Salva e log periodico
+                        if current_row % 50000 == 0:
+                            log_info(f"Processate {current_row-2} righe di {total_rows} per {sheet_name}")
+                            wb.save(self.main_file)
                             gc.collect()
                     
                     # Applica stili
                     self._apply_header_style(sheet)
                     self._optimize_column_widths(sheet)
                     
-                    # Salva dopo ogni foglio
+                    # Salva
                     log_info(f"Salvataggio foglio {sheet_name}")
                     wb.save(self.main_file)
                     
-                    # Rimuovi il CSV
+                    # Rimuovi CSV
                     os.remove(csv_file)
+                    log_info(f"File CSV {sheet_name} rimosso")
                     
                 except Exception as e:
                     log_info(f"Errore durante l'elaborazione di {sheet_name}: {str(e)}")
                     raise
             
-            # Chiudi il workbook
+            # Chiudi workbook
             wb.close()
             
-            # Rimuovi la directory temporanea
+            # Pulizia directory temporanea
             try:
                 os.rmdir(self.temp_dir)
                 log_info("Directory temporanea rimossa")
