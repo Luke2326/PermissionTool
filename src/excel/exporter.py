@@ -398,6 +398,9 @@ def select_output_directory() -> Path:
     
     return Path(directory) if directory else Path.cwd()
 
+def format_clickable_path(path: str) -> str:
+    return f"\033[94m{path}\033[0m"
+
 def export_to_excel(environment_config: Dict, output_path: str = None, environment_name: str = "UNKNOWN") -> str:
     """
     Export database views to Excel file
@@ -412,7 +415,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     """
     # Chiedi all'utente di selezionare la directory di output
     base_path = select_output_directory()
-    log_info(f"Directory di output selezionata: {base_path}")
+    log_info(f"Directory di output selezionata: {format_clickable_path(str(base_path))}")
     
     # Crea la cartella Estrazioni se non esiste
     estrazioni_path = base_path / "Estrazioni"
@@ -509,7 +512,7 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
         # Fase finale: unione dei file
         log_info("Fase 3: Unione dei file")
         exporter.finalize()
-        log_info(f"Export completato. File salvato in: {output_path}")
+        log_info(f"Export completato. File salvato in: {format_clickable_path(output_path)}")
         return output_path
         
     except PermissionError as e:

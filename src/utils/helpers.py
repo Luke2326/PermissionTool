@@ -92,3 +92,23 @@ def select_excel_file() -> Path:
         raise ValueError("Nessun file selezionato")
         
     return Path(file_path)
+
+def format_clickable_path(path: str) -> str:
+    """
+    Formatta un percorso file come link cliccabile nel terminale con colori
+    
+    Args:
+        path: Il percorso del file da formattare
+        
+    Returns:
+        str: Il percorso formattato come link cliccabile e colorato
+    """
+    # Codici ANSI per i colori e lo stile
+    BLUE = '\033[94m'
+    UNDERLINE = '\033[4m'
+    END = '\033[0m'
+    
+    # Crea il link cliccabile (OSC 8) con colore blu e sottolineato
+    clickable = f"\033]8;;file://{path}\033\\{BLUE}{UNDERLINE}{path}{END}\033]8;;\033\\"
+    
+    return clickable

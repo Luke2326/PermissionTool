@@ -4,7 +4,7 @@ from pathlib import Path
 from src.excel.reader import ExcelReader
 from src.query.generator import QueryGenerator
 from src.excel.exporter import export_to_excel
-from src.utils.helpers import setup_logging, validate_file_path, extract_id_from_path, select_excel_file
+from src.utils.helpers import setup_logging, validate_file_path, extract_id_from_path, select_excel_file, format_clickable_path
 from config.constants import ENVIRONMENTS, OUTPUT_DIR
 
 def generate_queries():
@@ -13,7 +13,7 @@ def generate_queries():
         # Get the Excel file path using file dialog
         try:
             excel_path = select_excel_file()
-            print(f"\nFile selezionato: {excel_path}")
+            print(f"\nFile selezionato: {format_clickable_path(str(excel_path))}")
         except ValueError as e:
             print(f"\nErrore: {str(e)}")
             return False
@@ -36,7 +36,7 @@ def generate_queries():
         query_generator.generate_all_queries()
         output_file = query_generator.save_queries()
 
-        print(f"\nQuery salvate nel file: {output_file}")
+        print(f"\nQuery salvate nel file: {format_clickable_path(output_file)}")
         logging.info(f"Query generate con successo nel file: {output_file}")
         return True
         
