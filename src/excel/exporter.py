@@ -66,8 +66,9 @@ class Exporter:
     Usa pyarrow per la gestione efficiente dei dati e xlsxwriter per Excel.
     """
     
-    CHUNK_SIZE = 50000  # Dimensione ottimale del chunk per processamento
-    MAX_COLUMN_WIDTH = 100  # Larghezza massima colonna in caratteri
+    CHUNK_SIZE = 100000  # Aumentato per migliori performance
+    MAX_COLUMN_WIDTH = 100
+    MAX_WORKERS = 4  # Numero di worker per il processing parallelo
     
     def __init__(self, output_file: str):
         """
@@ -81,18 +82,20 @@ class Exporter:
         self.workbook = None
         self.formats = {}
         self.large_files = {}
-        self.column_widths = {}  # Cache per le larghezze delle colonne
+        self.column_widths = {}
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
         
-        # Crea il workbook con opzioni ottimizzate
+        # Opzioni ottimizzate per il workbook
         self.workbook = xlsxwriter.Workbook(
             self.output_file,
             {
                 'constant_memory': True,
                 'default_date_format': 'yyyy-mm-dd',
                 'remove_timezone': True,
-                'strings_to_numbers': True,  # Converte automaticamente stringhe in numeri
-                'strings_to_formulas': False,  # Disabilita conversione in formule
-                'strings_to_urls': False  # Disabilita conversione in URL
+                'strings_to_numbers': True,
+                'strings_to_formulas': False,
+                'strings_to_urls': False,
+                'use_zip64': True  # Supporto per file molto grandi
             }
         )
         
@@ -124,22 +127,40 @@ class Exporter:
             'valign': 'top'
         })
 
-    def _process_chunk(self, chunk: pd.DataFrame, worksheet: Any, start_row: int, formats: Dict) -> None:
+    def _process_chunk_parallel(self, chunk: pd.DataFrame, worksheet: Any, start_row: int, formats: Dict) -> None:
         """
-        Processa un chunk di dati in modo ottimizzato
+        Processa un chunk di dati in parallelo
         """
-        # Converti il chunk in una lista di liste per scrittura più veloce
-        data = chunk.values.tolist()
-        
-        # Scrivi i dati in batch
-        for row_idx, row in enumerate(data, start_row):
-            for col_idx, value in enumerate(row):
+        # Prepara i dati per la scrittura veloce
+        data = []
+        for _, row in chunk.iterrows():
+            row_data = []
+            for value in row:
                 if pd.isna(value):
-                    continue  # Salta celle vuote
+                    row_data.append('')
                 elif isinstance(value, pd.Timestamp):
-                    worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), formats['date'])
+                    row_data.append(value.to_pydatetime())
                 else:
-                    worksheet.write(row_idx, col_idx, value, formats['base'])
+                    row_data.append(value)
+            data.append(row_data)
+        
+        # Usa write_row_data per scrittura più veloce
+        worksheet.write_row_data(start_row, 0, data)
+
+    def _optimize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Ottimizza il DataFrame per l'esportazione
+        """
+        # Converti le colonne object in categorie dove possibile
+        for col in df.select_dtypes(include=['object']).columns:
+            if df[col].nunique() / len(df) < 0.5:  # Se meno del 50% dei valori sono unici
+                df[col] = df[col].astype('category')
+        
+        # Ottimizza i tipi di dati numerici
+        for col in df.select_dtypes(include=['int64', 'float64']).columns:
+            df[col] = pd.to_numeric(df[col], downcast='integer')
+        
+        return df
 
     def _calculate_column_widths(self, df: pd.DataFrame, sample_size: int = 1000) -> Dict[int, int]:
         """
@@ -188,51 +209,73 @@ class Exporter:
         total_rows = len(df)
         
         try:
+            # Ottimizza il DataFrame
+            df = self._optimize_dataframe(df)
+            
             if sheet_name.lower() in LARGE_TABLES:
-                # Per tabelle grandi, usa pyarrow e file parquet con compressione
                 log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in formato parquet...")
                 
-                # Converti in tabella pyarrow con opzioni ottimizzate
+                # Usa pyarrow con compressione ottimizzata
                 table = pa.Table.from_pandas(df, preserve_index=False)
-                
-                # Scrivi in parquet con compressione
                 parquet_file = self.temp_dir / f"{sheet_name}.parquet"
-                pa.parquet.write_table(table, parquet_file, compression='snappy')
+                
+                # Usa compressione ZSTD per miglior rapporto compressione/velocità
+                pa.parquet.write_table(
+                    table,
+                    parquet_file,
+                    compression='zstd',
+                    compression_level=3,
+                    row_group_size=self.CHUNK_SIZE
+                )
                 
                 self.large_files[sheet_name] = parquet_file
                 log_info(f"File parquet {sheet_name} completato")
                 
-                # Libera memoria
                 del df, table
                 gc.collect()
                 
             else:
-                # Per tabelle piccole, scrivi direttamente in Excel
                 log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file Excel...")
-                
-                # Crea il foglio
                 worksheet = self.workbook.add_worksheet(sheet_name)
                 
                 # Scrivi header
                 for col, name in enumerate(df.columns):
                     worksheet.write(0, col, str(name), self.formats['header'])
                 
-                # Calcola le larghezze delle colonne
+                # Calcola e imposta larghezze colonne
                 widths = self._calculate_column_widths(df)
                 for col, width in widths.items():
                     worksheet.set_column(col, col, width)
                 
-                # Processa i dati in chunks
+                # Processa chunks in parallelo
+                futures = []
                 for start_idx in range(0, len(df), self.CHUNK_SIZE):
                     end_idx = min(start_idx + self.CHUNK_SIZE, len(df))
                     chunk = df.iloc[start_idx:end_idx]
-                    self._process_chunk(chunk, worksheet, start_idx + 1, self.formats)
                     
-                    if end_idx % (self.CHUNK_SIZE * 2) == 0:
-                        log_info(f"Scritte {end_idx} righe di {total_rows} per {sheet_name}")
-                        gc.collect()
+                    future = self.executor.submit(
+                        self._process_chunk_parallel,
+                        chunk,
+                        worksheet,
+                        start_idx + 1,
+                        self.formats
+                    )
+                    futures.append(future)
+                    
+                    if len(futures) >= self.MAX_WORKERS:
+                        # Attendi che almeno un worker finisca
+                        done, futures = concurrent.futures.wait(
+                            futures,
+                            return_when=concurrent.futures.FIRST_COMPLETED
+                        )
+                        
+                        if (start_idx + self.CHUNK_SIZE) % (self.CHUNK_SIZE * 2) == 0:
+                            log_info(f"Scritte {start_idx + self.CHUNK_SIZE} righe di {total_rows} per {sheet_name}")
+                            gc.collect()
                 
-                # Libera memoria
+                # Attendi il completamento di tutti i worker
+                concurrent.futures.wait(futures)
+                
                 del df
                 gc.collect()
             
@@ -333,10 +376,10 @@ class Exporter:
     def __del__(self):
         """Cleanup quando l'oggetto viene distrutto"""
         try:
+            if hasattr(self, 'executor'):
+                self.executor.shutdown(wait=True)
             if self.workbook:
                 self.workbook.close()
-            
-            # Rimuovi file temporanei
             if self.temp_dir.exists():
                 for file in self.temp_dir.glob('*'):
                     try:
