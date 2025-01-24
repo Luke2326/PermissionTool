@@ -6,7 +6,7 @@ import pyarrow as pa
 import pyarrow.csv as csv
 import xlsxwriter
 from pathlib import Path
-from typing import Dict, List, Generator, Optional
+from typing import Dict, List, Generator, Optional, Any
 import concurrent.futures
 from tqdm import tqdm
 import io
