@@ -4,23 +4,26 @@ from pathlib import Path
 from src.excel.reader import ExcelReader
 from src.query.generator import QueryGenerator
 from src.excel.exporter import export_to_excel
-from src.utils.helpers import setup_logging, validate_file_path, extract_id_from_path
+from src.utils.helpers import setup_logging, validate_file_path, extract_id_from_path, select_excel_file
 from config.constants import ENVIRONMENTS, OUTPUT_DIR
 
 def generate_queries():
     """Funzione per generare le query SQL da un file Excel"""
     try:
-        # Get the Excel file path from user
-        excel_path = input("\nInserisci il percorso del file Excel: ")
-        if not Path(excel_path).exists():
-            raise FileNotFoundError(f"File Excel non trovato in: {excel_path}")
+        # Get the Excel file path using file dialog
+        try:
+            excel_path = select_excel_file()
+            print(f"\nFile selezionato: {excel_path}")
+        except ValueError as e:
+            print(f"\nErrore: {str(e)}")
+            return False
 
         # Extract ID from filename if present
-        file_id = extract_id_from_path(excel_path)
+        file_id = extract_id_from_path(str(excel_path))
 
         # Read Excel data
         print("\nLettura del file Excel in corso...")
-        excel_reader = ExcelReader(excel_path)
+        excel_reader = ExcelReader(str(excel_path))
         excel_reader.validate_sheets()  # Validate required sheets exist
         data = excel_reader.read_all_sheets()  # Read all sheets in parallel
 
@@ -29,7 +32,7 @@ def generate_queries():
 
         # Generate queries
         print("\nGenerazione delle query in corso...")
-        query_generator = QueryGenerator(data, excel_path, file_id)
+        query_generator = QueryGenerator(data, str(excel_path), file_id)
         query_generator.generate_all_queries()
         output_file = query_generator.save_queries()
 

@@ -17,6 +17,8 @@ import sys
 import os
 import gc  # Importa il modulo gc per gestione memoria
 import tempfile  # Aggiungendo l'import mancante di tempfile
+import tkinter as tk
+from tkinter import filedialog
 
 # Configura il logging per essere sempre visibile
 class TqdmToLogger(io.StringIO):
@@ -376,6 +378,23 @@ class DatabaseFetcher:
             self.conn.close()
             log_info("Connessione al database chiusa")
 
+def select_output_directory() -> Path:
+    """
+    Apre una finestra di dialogo per selezionare la directory di output
+    
+    Returns:
+        Path: Percorso selezionato dall'utente o directory corrente se annullato
+    """
+    root = tk.Tk()
+    root.withdraw()  # Nasconde la finestra principale
+    
+    directory = filedialog.askdirectory(
+        title='Seleziona la directory per il salvataggio',
+        initialdir=str(Path.cwd())
+    )
+    
+    return Path(directory) if directory else Path.cwd()
+
 def export_to_excel(environment_config: Dict, output_path: str = None, environment_name: str = "UNKNOWN") -> str:
     """
     Export database views to Excel file
@@ -388,8 +407,9 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     Returns:
         str: Path to the generated Excel file
     """
-    # Definisci il percorso base per le estrazioni
-    base_path = Path(r"\\tsclient\V\Estrazioni")
+    # Chiedi all'utente di selezionare la directory di output
+    base_path = select_output_directory()
+    log_info(f"Directory di output selezionata: {base_path}")
     
     try:
         # Crea la directory se non esiste

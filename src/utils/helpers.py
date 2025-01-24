@@ -4,6 +4,9 @@ from typing import Optional
 import re
 from datetime import datetime
 import pandas as pd
+import tkinter as tk
+from tkinter import filedialog
+from pathlib import Path
 
 def setup_logging() -> None:
     """Configure logging for the application."""
@@ -57,3 +60,31 @@ def ensure_output_directory(base_dir: str) -> str:
     output_dir = os.path.join(os.path.expanduser("~"), "Documents", base_dir)
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
+
+def select_excel_file() -> Path:
+    """
+    Apre una finestra di dialogo per selezionare un file Excel
+    
+    Returns:
+        Path: Percorso del file Excel selezionato
+        
+    Raises:
+        ValueError: Se nessun file è stato selezionato
+    """
+    root = tk.Tk()
+    root.withdraw()  # Nasconde la finestra principale
+    
+    file_path = filedialog.askopenfilename(
+        title='Seleziona il file Excel',
+        initialdir=str(Path.cwd()),
+        filetypes=[
+            ('Excel files', '*.xlsx'),
+            ('Excel files', '*.xls'),
+            ('All files', '*.*')
+        ]
+    )
+    
+    if not file_path:
+        raise ValueError("Nessun file selezionato")
+        
+    return Path(file_path)
