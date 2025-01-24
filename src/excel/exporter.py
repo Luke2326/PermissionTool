@@ -66,6 +66,9 @@ class Exporter:
     Usa pyarrow per la gestione efficiente dei dati e xlsxwriter per Excel.
     """
     
+    CHUNK_SIZE = 50000  # Dimensione ottimale del chunk per processamento
+    MAX_COLUMN_WIDTH = 100  # Larghezza massima colonna in caratteri
+    
     def __init__(self, output_file: str):
         """
         Inizializza l'exporter
@@ -78,14 +81,18 @@ class Exporter:
         self.workbook = None
         self.formats = {}
         self.large_files = {}
+        self.column_widths = {}  # Cache per le larghezze delle colonne
         
-        # Crea il workbook
+        # Crea il workbook con opzioni ottimizzate
         self.workbook = xlsxwriter.Workbook(
             self.output_file,
             {
                 'constant_memory': True,
                 'default_date_format': 'yyyy-mm-dd',
-                'remove_timezone': True
+                'remove_timezone': True,
+                'strings_to_numbers': True,  # Converte automaticamente stringhe in numeri
+                'strings_to_formulas': False,  # Disabilita conversione in formule
+                'strings_to_urls': False  # Disabilita conversione in URL
             }
         )
         
@@ -117,6 +124,48 @@ class Exporter:
             'valign': 'top'
         })
 
+    def _process_chunk(self, chunk: pd.DataFrame, worksheet: Any, start_row: int, formats: Dict) -> None:
+        """
+        Processa un chunk di dati in modo ottimizzato
+        """
+        # Converti il chunk in una lista di liste per scrittura più veloce
+        data = chunk.values.tolist()
+        
+        # Scrivi i dati in batch
+        for row_idx, row in enumerate(data, start_row):
+            for col_idx, value in enumerate(row):
+                if pd.isna(value):
+                    continue  # Salta celle vuote
+                elif isinstance(value, pd.Timestamp):
+                    worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), formats['date'])
+                else:
+                    worksheet.write(row_idx, col_idx, value, formats['base'])
+
+    def _calculate_column_widths(self, df: pd.DataFrame, sample_size: int = 1000) -> Dict[int, int]:
+        """
+        Calcola le larghezze ottimali delle colonne usando un campione di dati
+        """
+        if df.empty:
+            return {}
+            
+        widths = {}
+        # Usa un campione casuale per performance
+        sample = df.sample(n=min(sample_size, len(df))) if len(df) > sample_size else df
+        
+        for idx, col in enumerate(df.columns):
+            # Larghezza header
+            max_width = len(str(col)) + 2
+            
+            # Larghezza dati
+            col_data = sample.iloc[:, idx].dropna().astype(str)
+            if not col_data.empty:
+                data_width = col_data.str.len().max() + 2
+                max_width = min(max(max_width, data_width), self.MAX_COLUMN_WIDTH)
+            
+            widths[idx] = max_width
+            
+        return widths
+
     def _adjust_column_width(self, worksheet, col_idx, header, data_sample):
         """
         Calcola la larghezza ottimale per una colonna basandosi sull'header e un campione di dati
@@ -134,21 +183,21 @@ class Exporter:
         worksheet.set_column(col_idx, col_idx, min(max_width, 255))
 
     def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
-        """Scrive un DataFrame in un foglio Excel"""
+        """Scrive un DataFrame in un foglio Excel in modo ottimizzato"""
         start_time = time.time()
         total_rows = len(df)
         
         try:
             if sheet_name.lower() in LARGE_TABLES:
-                # Per tabelle grandi, usa pyarrow e file parquet
+                # Per tabelle grandi, usa pyarrow e file parquet con compressione
                 log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in formato parquet...")
                 
-                # Converti in tabella pyarrow
-                table = pa.Table.from_pandas(df)
+                # Converti in tabella pyarrow con opzioni ottimizzate
+                table = pa.Table.from_pandas(df, preserve_index=False)
                 
-                # Scrivi in parquet
+                # Scrivi in parquet con compressione
                 parquet_file = self.temp_dir / f"{sheet_name}.parquet"
-                pa.parquet.write_table(table, parquet_file)
+                pa.parquet.write_table(table, parquet_file, compression='snappy')
                 
                 self.large_files[sheet_name] = parquet_file
                 log_info(f"File parquet {sheet_name} completato")
@@ -168,24 +217,19 @@ class Exporter:
                 for col, name in enumerate(df.columns):
                     worksheet.write(0, col, str(name), self.formats['header'])
                 
-                # Calcola le larghezze delle colonne basandosi su un campione di dati
-                sample_size = min(1000, len(df))
-                for col, name in enumerate(df.columns):
-                    sample_data = df.iloc[:sample_size, col].dropna().astype(str)
-                    self._adjust_column_width(worksheet, col, name, sample_data)
+                # Calcola le larghezze delle colonne
+                widths = self._calculate_column_widths(df)
+                for col, width in widths.items():
+                    worksheet.set_column(col, col, width)
                 
-                # Scrivi dati
-                for row_idx, row in enumerate(df.itertuples(index=False), 1):
-                    for col_idx, value in enumerate(row):
-                        if pd.isna(value):
-                            worksheet.write(row_idx, col_idx, '', self.formats['base'])
-                        elif isinstance(value, pd.Timestamp):
-                            worksheet.write_datetime(row_idx, col_idx, value.to_pydatetime(), self.formats['date'])
-                        else:
-                            worksheet.write(row_idx, col_idx, value, self.formats['base'])
+                # Processa i dati in chunks
+                for start_idx in range(0, len(df), self.CHUNK_SIZE):
+                    end_idx = min(start_idx + self.CHUNK_SIZE, len(df))
+                    chunk = df.iloc[start_idx:end_idx]
+                    self._process_chunk(chunk, worksheet, start_idx + 1, self.formats)
                     
-                    if row_idx % 10000 == 0:
-                        log_info(f"Scritte {row_idx} righe di {total_rows} per {sheet_name}")
+                    if end_idx % (self.CHUNK_SIZE * 2) == 0:
+                        log_info(f"Scritte {end_idx} righe di {total_rows} per {sheet_name}")
                         gc.collect()
                 
                 # Libera memoria
@@ -228,7 +272,7 @@ class Exporter:
                     
                     # Scrivi dati in chunks
                     current_row = 1
-                    for batch in reader.iter_batches(batch_size=50000):
+                    for batch in reader.iter_batches(batch_size=self.CHUNK_SIZE):
                         df_chunk = batch.to_pandas()
                         
                         # Aggiorna le larghezze massime delle colonne
@@ -251,7 +295,7 @@ class Exporter:
                         
                         current_row += len(df_chunk)
                         
-                        if current_row % 50000 == 0:
+                        if current_row % (self.CHUNK_SIZE * 2) == 0:
                             log_info(f"Processate {current_row-1} righe per {sheet_name}")
                             gc.collect()
                         
@@ -259,7 +303,7 @@ class Exporter:
                     
                     # Imposta le larghezze finali delle colonne
                     for col, width in enumerate(max_widths):
-                        worksheet.set_column(col, col, min(width, 100))
+                        worksheet.set_column(col, col, min(width, self.MAX_COLUMN_WIDTH))
                     
                     # Rimuovi il file parquet
                     os.remove(parquet_file)
