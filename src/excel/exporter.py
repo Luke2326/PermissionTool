@@ -125,14 +125,11 @@ class Exporter:
         # Analizza il campione di dati
         for value in data_sample:
             if value is not None and pd.notna(value):
-                # Gestisci i valori multi-riga
-                lines = str(value).split('\n')
-                for line in lines:
-                    max_width = max(max_width, len(str(line)) + 2)
+                # Usa la lunghezza effettiva del valore senza spezzarlo
+                max_width = max(max_width, len(str(value)) + 2)
         
-        # Limita la larghezza massima a 100 caratteri
-        max_width = min(max_width, 100)
-        worksheet.set_column(col_idx, col_idx, max_width)
+        # Imposta la larghezza della colonna (massimo 255 caratteri, limite di Excel)
+        worksheet.set_column(col_idx, col_idx, min(max_width, 255))
 
     def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
         """Scrive un DataFrame in un foglio Excel"""
