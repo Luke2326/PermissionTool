@@ -387,11 +387,14 @@ def select_output_directory() -> Path:
     """
     root = tk.Tk()
     root.withdraw()  # Nasconde la finestra principale
+    root.attributes('-topmost', True)  # Forza la finestra in primo piano
     
     directory = filedialog.askdirectory(
         title='Seleziona la directory per il salvataggio',
         initialdir=str(Path.cwd())
     )
+    
+    root.destroy()  # Chiude correttamente la finestra Tk
     
     return Path(directory) if directory else Path.cwd()
 
@@ -411,26 +414,27 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     base_path = select_output_directory()
     log_info(f"Directory di output selezionata: {base_path}")
     
+    # Crea la cartella Estrazioni se non esiste
+    estrazioni_path = base_path / "Estrazioni"
     try:
-        # Crea la directory se non esiste
-        base_path.mkdir(parents=True, exist_ok=True)
-        log_info(f"Directory di output verificata: {base_path}")
+        estrazioni_path.mkdir(parents=True, exist_ok=True)
+        log_info(f"Directory Estrazioni creata/verificata: {estrazioni_path}")
     except Exception as e:
-        log_info(f"Impossibile creare la directory {base_path}. Uso il percorso locale. Errore: {str(e)}")
-        base_path = Path.cwd()
-
+        log_info(f"Impossibile creare la directory Estrazioni. Errore: {str(e)}")
+        estrazioni_path = base_path
+    
     if output_path is None:
         # Crea sottodirectory per anno e mese
         current_date = datetime.now()
         year_month = current_date.strftime("%Y_%m")
-        year_month_path = base_path / year_month
+        year_month_path = estrazioni_path / year_month
         
         try:
             year_month_path.mkdir(parents=True, exist_ok=True)
             log_info(f"Creata directory per anno/mese: {year_month_path}")
         except Exception as e:
             log_info(f"Impossibile creare la directory {year_month_path}. Uso il percorso base. Errore: {str(e)}")
-            year_month_path = base_path
+            year_month_path = estrazioni_path
 
         timestamp = current_date.strftime("%Y%m%d_%H%M%S")
         output_path = str(year_month_path / f"export_{environment_name}_{timestamp}.xlsx")

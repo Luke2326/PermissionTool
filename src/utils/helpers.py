@@ -73,16 +73,20 @@ def select_excel_file() -> Path:
     """
     root = tk.Tk()
     root.withdraw()  # Nasconde la finestra principale
+    root.attributes('-topmost', True)  # Forza la finestra in primo piano
     
     file_path = filedialog.askopenfilename(
         title='Seleziona il file Excel',
         initialdir=str(Path.cwd()),
         filetypes=[
             ('Excel files', '*.xlsx'),
+            ('Excel files', '*.xlsb'),
             ('Excel files', '*.xls'),
             ('All files', '*.*')
         ]
     )
+    
+    root.destroy()  # Chiude correttamente la finestra Tk
     
     if not file_path:
         raise ValueError("Nessun file selezionato")
