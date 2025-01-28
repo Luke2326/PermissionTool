@@ -104,13 +104,14 @@ class QueryGenerator:
             file_type_condition = f"(SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['File Type']}'')" if pd.notna(row['File Type']) else "0"
             entity_condition = f"(SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity']}'')" if pd.notna(row['Entity']) else "0"
             
-            return f"""INSERT INTO public."TBM_Profiles" ("ExerciseTypeId","FileTypeId","EntityId","PermissionId","GroupId")
+            return f"""INSERT INTO public."TBM_Profiles" ("ExerciseTypeId","FileTypeId","EntityId","PermissionId","GroupId","IsDeleted")
                     VALUES (
                         {exercise_id},
                         {file_type_condition},
                         {entity_condition},
                         (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality"]}''),
-                        (SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id})
+                        (SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id}),
+                        false
                     )
                     ON CONFLICT ("GroupId", "PermissionId", "FileTypeId", "EntityId") DO NOTHING;"""
         elif row['Delta'].upper() == 'DELETE':
