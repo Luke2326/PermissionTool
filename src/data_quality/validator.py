@@ -73,7 +73,7 @@ class DataQualityValidator:
         return errors
     
     def export_errors_to_excel(self, output_dir: str = "DQ_Results") -> str:
-        """Esporta gli errori in un file Excel"""
+        """Esporta gli errori in un file Excel con formattazione migliorata"""
         if not self.get_all_errors():
             return ""
             
@@ -85,11 +85,114 @@ class DataQualityValidator:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = output_path / f"dq_errors_{timestamp}.xlsx"
         
-        # Prepara i dati per l'export
-        with pd.ExcelWriter(output_file) as writer:
-            for rule_name, rule_errors in self.get_all_errors().items():
-                if rule_errors:
-                    df = pd.DataFrame(rule_errors)
-                    df.to_excel(writer, sheet_name=rule_name, index=False)
+        # Crea il workbook con xlsxwriter per un maggior controllo sulla formattazione
+        workbook = pd.ExcelWriter(output_file, engine='xlsxwriter')
+        wb = workbook.book
+        
+        # Definisci gli stili
+        header_format = wb.add_format({
+            'bold': True,
+            'font_size': 12,
+            'bg_color': '#4F81BD',
+            'font_color': 'white',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'text_wrap': True
+        })
+        
+        error_format = wb.add_format({
+            'bg_color': '#FFC7CE',
+            'font_color': '#9C0006'
+        })
+        
+        normal_format = wb.add_format({
+            'font_size': 11,
+            'align': 'left',
+            'valign': 'vcenter',
+            'text_wrap': True
+        })
+        
+        # Crea il foglio di riepilogo
+        summary_data = []
+        for rule_name, rule_errors in self.get_all_errors().items():
+            summary_data.append({
+                'Regola': rule_name,
+                'Numero Errori': len(rule_errors),
+                'Fogli Coinvolti': len(set(err['sheet_name'] for err in rule_errors))
+            })
+        
+        if summary_data:
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_excel(workbook, sheet_name='Riepilogo', index=False)
+            summary_sheet = wb.get_worksheet_by_name('Riepilogo')
+            
+            # Formatta il foglio di riepilogo
+            for col_num, col in enumerate(summary_df.columns):
+                summary_sheet.write(0, col_num, col, header_format)
+                summary_sheet.set_column(col_num, col_num, 20)
+            
+            # Aggiungi grafico a torta per la distribuzione degli errori
+            pie_chart = wb.add_chart({'type': 'pie'})
+            pie_chart.add_series({
+                'name': 'Distribuzione Errori',
+                'categories': ['Riepilogo', 1, 0, len(summary_data), 0],
+                'values': ['Riepilogo', 1, 1, len(summary_data), 1],
+            })
+            pie_chart.set_title({'name': 'Distribuzione Errori per Regola'})
+            summary_sheet.insert_chart('E2', pie_chart)
+        
+        # Crea fogli dettagliati per ogni regola
+        for rule_name, rule_errors in self.get_all_errors().items():
+            if not rule_errors:
+                continue
+                
+            # Crea DataFrame con gli errori
+            df = pd.DataFrame(rule_errors)
+            
+            # Rinomina le colonne per maggiore chiarezza
+            df = df.rename(columns={
+                'sheet_name': 'Foglio',
+                'row_index': 'Riga Excel',
+                'message': 'Descrizione Errore'
+            })
+            
+            # Ordina per foglio e riga
+            df = df.sort_values(['Foglio', 'Riga Excel'])
+            
+            # Scrivi il DataFrame
+            sheet_name = rule_name[:31]  # Excel limita i nomi dei fogli a 31 caratteri
+            df.to_excel(workbook, sheet_name=sheet_name, index=False)
+            
+            # Ottieni il worksheet
+            worksheet = wb.get_worksheet_by_name(sheet_name)
+            
+            # Formatta l'header
+            for col_num, col in enumerate(df.columns):
+                worksheet.write(0, col_num, col, header_format)
+                
+                # Imposta larghezza colonna basata sul contenuto
+                max_length = max(
+                    df[col].astype(str).apply(len).max(),
+                    len(col)
+                )
+                worksheet.set_column(col_num, col_num, min(max_length + 2, 50))
+            
+            # Formatta le celle con gli errori
+            for row_num in range(1, len(df) + 1):
+                worksheet.set_row(row_num, None, normal_format)
+                # Evidenzia la colonna degli errori
+                worksheet.write(row_num, df.columns.get_loc('Descrizione Errore'),
+                              df.iloc[row_num-1]['Descrizione Errore'],
+                              error_format)
+            
+            # Aggiungi filtri
+            worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
+            
+            # Congela la prima riga
+            worksheet.freeze_panes(1, 0)
+        
+        # Salva il file
+        workbook.close()
         
         return str(output_file)
