@@ -17,7 +17,7 @@ class DuplicateCheckRule(DQRule):
             'Prometheus Groups': ['Exercise Type','Group Code','Reference Node','Description'],
             'Prometheus Permissions': ['Exercise Type','Group Code','Functionality Name','Entity Name','FileType Name'],
             'Prometheus Roles': ['Role Unique Name','Role Name'],
-            'Prometheus Permission Set': ['ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'Set Version Name'],
+            'Prometheus Permission Set': ['Exercise Type','ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'Set Version Name'],
             'Prometheus Set Role Group Ver': ['Exercise Type','Set Version Name','Role Unique Name','Group Unique Name']
         }
     

@@ -101,29 +101,29 @@ class QueryGenerator:
     def _generate_permission_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
-            file_type_condition = f"(SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['File Type']}'')" if pd.notna(row['File Type']) else "0"
-            entity_condition = f"(SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity']}'')" if pd.notna(row['Entity']) else "0"
+            file_type_condition = f"(SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['FileType Name']}'')" if pd.notna(row['FileType Name']) else "0"
+            entity_condition = f"(SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity Name']}'')" if pd.notna(row['Entity Name']) else "0"
             
             return f"""INSERT INTO public."TBM_Profiles" ("ExerciseTypeId","FileTypeId","EntityId","PermissionId","GroupId","IsDeleted")
                     VALUES (
                         {exercise_id},
                         {file_type_condition},
                         {entity_condition},
-                        (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality"]}''),
+                        (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality Name"]}''),
                         (SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id}),
                         false
                     )
                     ON CONFLICT ("GroupId", "PermissionId", "FileTypeId", "EntityId") DO NOTHING;"""
         elif row['Delta'].upper() == 'DELETE':
             exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
-            file_type_condition = f"AND \"FileTypeId\" = (SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['File Type']}'')" if pd.notna(row['File Type']) else ""
-            entity_condition = f"AND \"EntityId\" = (SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity']}'')" if pd.notna(row['Entity']) else ""
+            file_type_condition = f"AND \"FileTypeId\" = (SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['FileType Name']}'')" if pd.notna(row['FileType Name']) else ""
+            entity_condition = f"AND \"EntityId\" = (SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity Name']}'')" if pd.notna(row['Entity Name']) else ""
             
             return f"""DELETE FROM public."TBM_Profiles" 
                     WHERE "GroupId" = (SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id})
                     {entity_condition}
                     {file_type_condition}
-                    AND "PermissionId" = (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality"]}'');"""
+                    AND "PermissionId" = (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality Name"]}'');"""
         return None
 
     def _generate_roles_query(self, row: pd.Series) -> Optional[str]:
@@ -138,11 +138,11 @@ class QueryGenerator:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
             return f"""INSERT INTO public."TBM_ProfileSet" ("Name","ExerciseTypeId")
-                    VALUES (''{row["Set Name"]}'',{exercise_id});
+                    VALUES (''{row["ProfileSetName"]}'',{exercise_id});
                     INSERT INTO public."TBM_ProfileSetVersion" ("ProfileSetId","Name","Description","Version")
                     VALUES (
-                        (select "Id" from public."TBM_ProfileSet" WHERE "Name" = ''{row["Set Name"]}''),
-                        ''{row["Version Name"]}'',
+                        (select "Id" from public."TBM_ProfileSet" WHERE "Name" = ''{row["ProfileSetName"]}''),
+                        ''{row["ProfileSetVersionName"]}'',
                         ''{row["Set Version Name"]}'',
                         ''{row["Version Number"]}''
                     );"""
@@ -150,7 +150,7 @@ class QueryGenerator:
             return f"""DELETE FROM public."TBM_ProfileSetVersion" 
                     WHERE "Description" = ''{row["Set Version Name"]}'';
                     DELETE FROM public."TBM_ProfileSet"
-                    WHERE "Name" = ''{row["Set Name"]}'';"""
+                    WHERE "Name" = ''{row["ProfileSetName"]}'';"""
         return None
 
     def _generate_set_role_group_ver_query(self, row: pd.Series) -> Optional[str]:
