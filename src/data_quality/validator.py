@@ -150,12 +150,19 @@ class DataQualityValidator:
             # Crea DataFrame con gli errori
             df = pd.DataFrame(rule_errors)
             
-            # Rinomina le colonne per maggiore chiarezza
-            df = df.rename(columns={
+            # Rinomina le colonne di base
+            column_renames = {
                 'sheet_name': 'Foglio',
-                'row_index': 'Riga Excel',
-                'message': 'Descrizione Errore'
-            })
+                'row_index': 'Riga Excel'
+            }
+            
+            # Rinomina le colonne mantenendo le colonne dei campi chiave invariate
+            df = df.rename(columns=column_renames)
+            
+            # Riordina le colonne: prima Foglio e Riga Excel, poi i campi chiave
+            fixed_columns = ['Foglio', 'Riga Excel']
+            key_columns = [col for col in df.columns if col not in fixed_columns]
+            df = df[fixed_columns + key_columns]
             
             # Ordina per foglio e riga
             df = df.sort_values(['Foglio', 'Riga Excel'])
@@ -178,19 +185,20 @@ class DataQualityValidator:
                 )
                 worksheet.set_column(col_num, col_num, min(max_length + 2, 50))
             
-            # Formatta le celle con gli errori
+            # Formatta le celle
             for row_num in range(1, len(df) + 1):
-                worksheet.set_row(row_num, None, normal_format)
-                # Evidenzia la colonna degli errori
-                worksheet.write(row_num, df.columns.get_loc('Descrizione Errore'),
-                              df.iloc[row_num-1]['Descrizione Errore'],
-                              error_format)
+                for col_num, value in enumerate(df.iloc[row_num-1]):
+                    if pd.isna(value):
+                        worksheet.write(row_num, col_num, '', normal_format)
+                    else:
+                        worksheet.write(row_num, col_num, value, 
+                                     error_format if col_num >= len(fixed_columns) else normal_format)
             
             # Aggiungi filtri
             worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
             
-            # Congela la prima riga
-            worksheet.freeze_panes(1, 0)
+            # Congela le prime due colonne e la prima riga
+            worksheet.freeze_panes(1, 2)
         
         # Salva il file
         workbook.close()

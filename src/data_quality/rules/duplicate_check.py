@@ -15,9 +15,9 @@ class DuplicateCheckRule(DQRule):
             'Prometheus Entities': ['Entity', 'ObjectType','Entity Type','Country Code','Node Level'],
             'Prometheus Data Items': ['Entity','File Type'],
             'Prometheus Groups': ['Exercise Type','Group Code','Reference Node','Description'],
-            'Prometheus Permissions': ['Exercise Type','Group Code','Functionality Name','Entity Name','File Type Name'],
+            'Prometheus Permissions': ['Exercise Type','Group Code','Functionality Name','Entity Name','FileType Name'],
             'Prometheus Roles': ['Role Unique Name','Role Name'],
-            'Prometheus Permission Set': ['ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'EntitSet Version NameyId'],
+            'Prometheus Permission Set': ['ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'Set Version Name'],
             'Prometheus Set Role Group Ver': ['Exercise Type','Set Version Name','Role Unique Name','Group Unique Name']
         }
     
@@ -53,11 +53,17 @@ class DuplicateCheckRule(DQRule):
                 
                 if match_condition.any():
                     has_errors = True
-                    matched_values = ", ".join(f"{k}={row[k]}" for k in key_columns if k in row)
-                    self.add_error(
-                        sheet_name=sheet_name,
-                        row_index=idx,
-                        message=f"Record già esistente nel database: {matched_values}"
-                    )
+                    # Crea un dizionario con i valori delle chiavi
+                    error_details = {
+                        'sheet_name': sheet_name,
+                        'row_index': idx + 2,  # +2 per compensare l'header e l'indice 0-based
+                    }
+                    
+                    # Aggiungi i valori delle chiavi come campi separati
+                    for key in key_columns:
+                        if key in row:
+                            error_details[key] = row[key]
+                    
+                    self.errors.append(error_details)
         
         return not has_errors
