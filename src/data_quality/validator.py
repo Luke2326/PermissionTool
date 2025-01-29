@@ -141,7 +141,7 @@ class DataQualityValidator:
                     if sheet_name not in errors_by_sheet:
                         errors_by_sheet[sheet_name] = []
                     error_copy = error.copy()
-                    error_copy['Tipo Errore'] = rule_name
+                    error_copy['Rule'] = rule_name
                     errors_by_sheet[sheet_name].append(error_copy)
             
             # Crea un foglio per ogni sheet con errori
@@ -151,21 +151,21 @@ class DataQualityValidator:
                 
                 # Rinomina le colonne di base
                 column_renames = {
-                    'sheet_name': 'Foglio',
-                    'row_index': 'Riga Excel',
-                    'Tipo Errore': 'Tipo Errore'
+                    'sheet_name': 'Sheet',
+                    'row_index': 'Excel Row',
+                    'Rule': 'Rule'
                 }
                 
                 # Rinomina le colonne mantenendo le colonne dei campi chiave invariate
                 df = df.rename(columns=column_renames)
                 
-                # Riordina le colonne: prima Tipo Errore, poi Riga Excel, poi i campi chiave
-                fixed_columns = ['Tipo Errore', 'Riga Excel']
-                key_columns = [col for col in df.columns if col not in fixed_columns and col != 'Foglio']
+                # Riordina le colonne: prima Rule, poi Excel Row, poi i campi chiave
+                fixed_columns = ['Rule', 'Excel Row']
+                key_columns = [col for col in df.columns if col not in fixed_columns and col != 'Sheet']
                 df = df[fixed_columns + key_columns]
                 
-                # Ordina per tipo di errore e riga
-                df = df.sort_values(['Tipo Errore', 'Riga Excel'])
+                # Ordina per rule e riga
+                df = df.sort_values(['Rule', 'Excel Row'])
                 
                 # Scrivi il DataFrame
                 safe_sheet_name = sheet_name[:31]  # Excel limita i nomi dei fogli a 31 caratteri
@@ -186,15 +186,15 @@ class DataQualityValidator:
                     worksheet.set_column(col_num, col_num, min(max_length + 2, 50))
                 
                 # Formatta le celle e applica colori alternati per tipo di errore
-                current_error_type = None
+                current_rule = None
                 current_format = normal_format
                 
                 for row_num in range(1, len(df) + 1):
-                    error_type = df.iloc[row_num-1]['Tipo Errore']
+                    rule = df.iloc[row_num-1]['Rule']
                     
-                    # Se cambia il tipo di errore, alterna il formato
-                    if error_type != current_error_type:
-                        current_error_type = error_type
+                    # Se cambia la rule, alterna il formato
+                    if rule != current_rule:
+                        current_rule = rule
                         current_format = rule_format if current_format == normal_format else normal_format
                     
                     # Scrivi ogni cella della riga
