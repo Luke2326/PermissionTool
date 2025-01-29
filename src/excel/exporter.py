@@ -457,6 +457,8 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     if output_path is None:
         base_path = select_output_directory()
         log_info(f"Directory di output selezionata: {format_clickable_path(str(base_path))}")
+        
+        # Crea il nome del file con timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = str(Path(base_path) / f"export_{environment_name}_{timestamp}.xlsx")
 

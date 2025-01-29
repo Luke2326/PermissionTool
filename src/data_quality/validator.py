@@ -72,21 +72,27 @@ class DataQualityValidator:
                 errors[rule.name] = rule.get_errors()
         return errors
     
-    def export_errors_to_excel(self, output_dir: str = None) -> str:
-        """Esporta gli errori in un file Excel con formattazione migliorata"""
+    def export_errors_to_excel(self, output_dir: str = None, environment_name: str = "UNKNOWN") -> str:
+        """
+        Esporta gli errori in un file Excel con formattazione migliorata
+        
+        Args:
+            output_dir: Directory di output per il file Excel. Se None, verrà chiesto all'utente
+            environment_name: Nome dell'ambiente (es. SIT, UAT, PREPROD)
+        
+        Returns:
+            str: Percorso del file Excel creato
+        """
         if not self.get_all_errors():
             return ""
             
-        # Crea il nome del file
+        # Se non è specificata una directory di output, chiedi all'utente
         if output_dir is None:
             output_dir = select_output_directory()
             
-        output_path = Path(output_dir)
+        # Crea il nome del file con timestamp e ambiente
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = output_path / f"dq_errors_{timestamp}.xlsx"
-        
-        # Crea directory se non esiste
-        output_path.mkdir(parents=True, exist_ok=True)
+        output_file = Path(output_dir) / f"dq_errors_{environment_name}_{timestamp}.xlsx"
         
         # Crea il workbook con xlsxwriter per un maggior controllo sulla formattazione
         workbook = None

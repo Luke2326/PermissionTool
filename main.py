@@ -105,7 +105,7 @@ def validate_data_quality():
             return True
         
         # Esporta gli errori
-        error_file = validator.export_errors_to_excel()
+        error_file = validator.export_errors_to_excel(environment_name=env_choice)
         print(f"\n✗ Trovati errori di Data Quality.")
         print(f"Report errori salvato in: {format_clickable_path(error_file)}")
         return False
