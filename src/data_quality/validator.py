@@ -124,37 +124,55 @@ class DataQualityValidator:
                 'text_wrap': True
             })
             
-            # Crea fogli dettagliati per ogni regola
+            rule_format = wb.add_format({
+                'font_size': 11,
+                'align': 'left',
+                'valign': 'vcenter',
+                'text_wrap': True,
+                'bold': True,
+                'bg_color': '#E6E6E6'
+            })
+            
+            # Organizza gli errori per sheet
+            errors_by_sheet = {}
             for rule_name, rule_errors in self.get_all_errors().items():
-                if not rule_errors:
-                    continue
-                    
+                for error in rule_errors:
+                    sheet_name = error['sheet_name']
+                    if sheet_name not in errors_by_sheet:
+                        errors_by_sheet[sheet_name] = []
+                    error_copy = error.copy()
+                    error_copy['Tipo Errore'] = rule_name
+                    errors_by_sheet[sheet_name].append(error_copy)
+            
+            # Crea un foglio per ogni sheet con errori
+            for sheet_name, sheet_errors in errors_by_sheet.items():
                 # Crea DataFrame con gli errori
-                df = pd.DataFrame(rule_errors)
+                df = pd.DataFrame(sheet_errors)
                 
                 # Rinomina le colonne di base
                 column_renames = {
                     'sheet_name': 'Foglio',
-                    'row_index': 'Riga Excel'
+                    'row_index': 'Riga Excel',
+                    'Tipo Errore': 'Tipo Errore'
                 }
                 
                 # Rinomina le colonne mantenendo le colonne dei campi chiave invariate
                 df = df.rename(columns=column_renames)
                 
-                # Riordina le colonne: prima Foglio e Riga Excel, poi i campi chiave
-                fixed_columns = ['Foglio', 'Riga Excel']
-                key_columns = [col for col in df.columns if col not in fixed_columns]
+                # Riordina le colonne: prima Tipo Errore, poi Riga Excel, poi i campi chiave
+                fixed_columns = ['Tipo Errore', 'Riga Excel']
+                key_columns = [col for col in df.columns if col not in fixed_columns and col != 'Foglio']
                 df = df[fixed_columns + key_columns]
                 
-                # Ordina per foglio e riga
-                df = df.sort_values(['Foglio', 'Riga Excel'])
+                # Ordina per tipo di errore e riga
+                df = df.sort_values(['Tipo Errore', 'Riga Excel'])
                 
                 # Scrivi il DataFrame
-                sheet_name = rule_name[:31]  # Excel limita i nomi dei fogli a 31 caratteri
-                df.to_excel(workbook, sheet_name=sheet_name, index=False)
+                safe_sheet_name = sheet_name[:31]  # Excel limita i nomi dei fogli a 31 caratteri
+                df.to_excel(workbook, sheet_name=safe_sheet_name, index=False)
                 
                 # Ottieni il worksheet
-                worksheet = wb.get_worksheet_by_name(sheet_name)
+                worksheet = wb.get_worksheet_by_name(safe_sheet_name)
                 
                 # Formatta l'header
                 for col_num, col in enumerate(df.columns):
@@ -167,14 +185,25 @@ class DataQualityValidator:
                     )
                     worksheet.set_column(col_num, col_num, min(max_length + 2, 50))
                 
-                # Formatta le celle
+                # Formatta le celle e applica colori alternati per tipo di errore
+                current_error_type = None
+                current_format = normal_format
+                
                 for row_num in range(1, len(df) + 1):
+                    error_type = df.iloc[row_num-1]['Tipo Errore']
+                    
+                    # Se cambia il tipo di errore, alterna il formato
+                    if error_type != current_error_type:
+                        current_error_type = error_type
+                        current_format = rule_format if current_format == normal_format else normal_format
+                    
+                    # Scrivi ogni cella della riga
                     for col_num, value in enumerate(df.iloc[row_num-1]):
                         if pd.isna(value):
-                            worksheet.write(row_num, col_num, '', normal_format)
+                            worksheet.write(row_num, col_num, '', current_format)
                         else:
                             worksheet.write(row_num, col_num, value, 
-                                         error_format if col_num >= len(fixed_columns) else normal_format)
+                                         error_format if col_num >= len(fixed_columns) else current_format)
                 
                 # Aggiungi filtri
                 worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
