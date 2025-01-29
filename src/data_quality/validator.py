@@ -115,35 +115,6 @@ class DataQualityValidator:
                 'text_wrap': True
             })
             
-            # Crea il foglio di riepilogo
-            summary_data = []
-            for rule_name, rule_errors in self.get_all_errors().items():
-                summary_data.append({
-                    'Regola': rule_name,
-                    'Numero Errori': len(rule_errors),
-                    'Fogli Coinvolti': len(set(err['sheet_name'] for err in rule_errors))
-                })
-            
-            if summary_data:
-                summary_df = pd.DataFrame(summary_data)
-                summary_df.to_excel(workbook, sheet_name='Riepilogo', index=False)
-                summary_sheet = wb.get_worksheet_by_name('Riepilogo')
-                
-                # Formatta il foglio di riepilogo
-                for col_num, col in enumerate(summary_df.columns):
-                    summary_sheet.write(0, col_num, col, header_format)
-                    summary_sheet.set_column(col_num, col_num, 20)
-                
-                # Aggiungi grafico a torta per la distribuzione degli errori
-                pie_chart = wb.add_chart({'type': 'pie'})
-                pie_chart.add_series({
-                    'name': 'Distribuzione Errori',
-                    'categories': ['Riepilogo', 1, 0, len(summary_data), 0],
-                    'values': ['Riepilogo', 1, 1, len(summary_data), 1],
-                })
-                pie_chart.set_title({'name': 'Distribuzione Errori per Regola'})
-                summary_sheet.insert_chart('E2', pie_chart)
-            
             # Crea fogli dettagliati per ogni regola
             for rule_name, rule_errors in self.get_all_errors().items():
                 if not rule_errors:
