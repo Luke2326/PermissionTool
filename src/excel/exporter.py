@@ -84,6 +84,7 @@ class Exporter:
         self.large_files = {}
         self.column_widths = {}
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
+        self._is_closed = False
         
         # Opzioni ottimizzate per il workbook
         self.workbook = xlsxwriter.Workbook(
@@ -288,8 +289,14 @@ class Exporter:
 
     def finalize(self):
         """Finalizza il file Excel unendo i file parquet"""
+        if self._is_closed:
+            log_info("Workbook già chiuso")
+            return
+
         if not self.large_files:
-            self.workbook.close()
+            if self.workbook:
+                self.workbook.close()
+                self._is_closed = True
             return
 
         log_info("Inizio fase di unione dei file...")
@@ -356,8 +363,10 @@ class Exporter:
                     log_info(f"Errore durante l'elaborazione di {sheet_name}: {str(e)}")
                     raise
 
-            # Chiudi il workbook
-            self.workbook.close()
+            # Chiudi il workbook solo se non è già stato chiuso
+            if self.workbook and not self._is_closed:
+                self.workbook.close()
+                self._is_closed = True
             
             # Pulizia directory temporanea
             try:
@@ -372,15 +381,27 @@ class Exporter:
         except Exception as e:
             log_info(f"Errore durante la fase di unione: {str(e)}")
             raise
+        finally:
+            # Assicurati che il workbook sia chiuso in caso di errori
+            if self.workbook and not self._is_closed:
+                try:
+                    self.workbook.close()
+                except:
+                    pass
+                self._is_closed = True
     
     def __del__(self):
         """Cleanup quando l'oggetto viene distrutto"""
         try:
             if hasattr(self, 'executor'):
                 self.executor.shutdown(wait=True)
-            if self.workbook:
-                self.workbook.close()
-            if self.temp_dir.exists():
+            if self.workbook and not self._is_closed:
+                try:
+                    self.workbook.close()
+                except:
+                    pass
+                self._is_closed = True
+            if hasattr(self, 'temp_dir') and self.temp_dir.exists():
                 for file in self.temp_dir.glob('*'):
                     try:
                         os.remove(file)
