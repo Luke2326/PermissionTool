@@ -453,34 +453,12 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
     Returns:
         str: Path to the generated Excel file
     """
-    # Chiedi all'utente di selezionare la directory di output
-    base_path = select_output_directory()
-    log_info(f"Directory di output selezionata: {format_clickable_path(str(base_path))}")
-    
-    # Crea la cartella Estrazioni se non esiste
-    estrazioni_path = base_path / "Estrazioni"
-    try:
-        estrazioni_path.mkdir(parents=True, exist_ok=True)
-        log_info(f"Directory Estrazioni creata/verificata: {estrazioni_path}")
-    except Exception as e:
-        log_info(f"Impossibile creare la directory Estrazioni. Errore: {str(e)}")
-        estrazioni_path = base_path
-    
+    # Chiedi all'utente di selezionare la directory di output se non specificata
     if output_path is None:
-        # Crea sottodirectory per anno e mese
-        current_date = datetime.now()
-        year_month = current_date.strftime("%Y_%m")
-        year_month_path = estrazioni_path / year_month
-        
-        try:
-            year_month_path.mkdir(parents=True, exist_ok=True)
-            log_info(f"Creata directory per anno/mese: {year_month_path}")
-        except Exception as e:
-            log_info(f"Impossibile creare la directory {year_month_path}. Uso il percorso base. Errore: {str(e)}")
-            year_month_path = estrazioni_path
-
-        timestamp = current_date.strftime("%Y%m%d_%H%M%S")
-        output_path = str(year_month_path / f"export_{environment_name}_{timestamp}.xlsx")
+        base_path = select_output_directory()
+        log_info(f"Directory di output selezionata: {format_clickable_path(str(base_path))}")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str(Path(base_path) / f"export_{environment_name}_{timestamp}.xlsx")
 
     exporter = None
     try:
