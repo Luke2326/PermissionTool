@@ -1,11 +1,11 @@
-from typing import Dict, List, Type
-import pandas as pd
-from pathlib import Path
-import logging
 from datetime import datetime
-from ..utils.file_utils import select_output_directory, format_clickable_path
+from pathlib import Path
+import pandas as pd
+from typing import Dict, List
+import xlsxwriter
+import logging
 from src.excel.reader import ExcelReader
-from src.excel.exporter import DatabaseFetcher
+from src.excel.exporter import DatabaseFetcher, select_output_directory, format_clickable_path
 from .base import DQRule
 from .rules.duplicate_check import DuplicateCheckRule
 
