@@ -128,25 +128,56 @@ class Exporter:
             'valign': 'top'
         })
 
-    def _process_chunk_parallel(self, chunk: pd.DataFrame, worksheet: Any, start_row: int, formats: Dict) -> None:
-        """
-        Processa un chunk di dati in parallelo
-        """
-        # Prepara i dati per la scrittura veloce
-        data = []
-        for _, row in chunk.iterrows():
-            row_data = []
-            for value in row:
-                if pd.isna(value):
-                    row_data.append('')
-                elif isinstance(value, pd.Timestamp):
-                    row_data.append(value.to_pydatetime())
-                else:
-                    row_data.append(value)
-            data.append(row_data)
+    def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
+        """Scrive un DataFrame in un foglio Excel in modo ottimizzato"""
+        if self._is_closed:
+            raise ValueError("Workbook già chiuso")
+            
+        start_time = time.time()
+        total_rows = len(df)
         
-        # Usa write_row_data per scrittura più veloce
-        worksheet.write_row_data(start_row, 0, data)
+        try:
+            # Ottimizza il DataFrame
+            df = self._optimize_dataframe(df)
+            
+            # Crea il foglio
+            worksheet = self.workbook.add_worksheet(sheet_name)
+            
+            # Scrivi header
+            for col, name in enumerate(df.columns):
+                worksheet.write(0, col, str(name), self.formats['header'])
+            
+            # Calcola e imposta larghezze colonne
+            widths = self._calculate_column_widths(df)
+            for col, width in widths.items():
+                worksheet.set_column(col, col, width)
+            
+            # Scrivi i dati in chunks
+            chunk_size = min(self.CHUNK_SIZE, total_rows)
+            for start_idx in range(0, total_rows, chunk_size):
+                end_idx = min(start_idx + chunk_size, total_rows)
+                chunk = df.iloc[start_idx:end_idx]
+                
+                # Scrivi ogni riga del chunk
+                for i, row in enumerate(chunk.itertuples(index=False), start_idx + 1):
+                    for col, value in enumerate(row):
+                        if pd.isna(value):
+                            worksheet.write(i, col, '', self.formats['base'])
+                        elif isinstance(value, pd.Timestamp):
+                            worksheet.write_datetime(i, col, value.to_pydatetime(), self.formats['date'])
+                        else:
+                            worksheet.write(i, col, value, self.formats['base'])
+                
+                if (start_idx + chunk_size) % (chunk_size * 2) == 0:
+                    log_info(f"Scritte {start_idx + chunk_size} righe di {total_rows} per {sheet_name}")
+                    gc.collect()
+            
+            elapsed = time.time() - start_time
+            log_info(f"Elaborazione {sheet_name} completata in {elapsed:.2f} secondi")
+            
+        except Exception as e:
+            log_info(f"Errore durante la scrittura di {sheet_name}: {str(e)}")
+            raise
 
     def _optimize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -187,105 +218,6 @@ class Exporter:
             widths[idx] = max_width
             
         return widths
-
-    def _adjust_column_width(self, worksheet, col_idx, header, data_sample):
-        """
-        Calcola la larghezza ottimale per una colonna basandosi sull'header e un campione di dati
-        """
-        # Lunghezza dell'header
-        max_width = len(str(header)) + 2
-        
-        # Analizza il campione di dati
-        for value in data_sample:
-            if value is not None and pd.notna(value):
-                # Usa la lunghezza effettiva del valore senza spezzarlo
-                max_width = max(max_width, len(str(value)) + 2)
-        
-        # Imposta la larghezza della colonna (massimo 255 caratteri, limite di Excel)
-        worksheet.set_column(col_idx, col_idx, min(max_width, 255))
-
-    def write_dataframe(self, df: pd.DataFrame, sheet_name: str):
-        """Scrive un DataFrame in un foglio Excel in modo ottimizzato"""
-        start_time = time.time()
-        total_rows = len(df)
-        
-        try:
-            # Ottimizza il DataFrame
-            df = self._optimize_dataframe(df)
-            
-            if sheet_name.lower() in LARGE_TABLES:
-                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) in formato parquet...")
-                
-                # Usa pyarrow con compressione ottimizzata
-                table = pa.Table.from_pandas(df, preserve_index=False)
-                parquet_file = self.temp_dir / f"{sheet_name}.parquet"
-                
-                # Usa compressione ZSTD per miglior rapporto compressione/velocità
-                pa.parquet.write_table(
-                    table,
-                    parquet_file,
-                    compression='zstd',
-                    compression_level=3,
-                    row_group_size=self.CHUNK_SIZE
-                )
-                
-                self.large_files[sheet_name] = parquet_file
-                log_info(f"File parquet {sheet_name} completato")
-                
-                del df, table
-                gc.collect()
-                
-            else:
-                log_info(f"Inizio scrittura {sheet_name} ({total_rows} righe) nel file Excel...")
-                worksheet = self.workbook.add_worksheet(sheet_name)
-                
-                # Scrivi header
-                for col, name in enumerate(df.columns):
-                    worksheet.write(0, col, str(name), self.formats['header'])
-                
-                # Calcola e imposta larghezze colonne
-                widths = self._calculate_column_widths(df)
-                for col, width in widths.items():
-                    worksheet.set_column(col, col, width)
-                
-                # Processa chunks in parallelo
-                futures = []
-                for start_idx in range(0, len(df), self.CHUNK_SIZE):
-                    end_idx = min(start_idx + self.CHUNK_SIZE, len(df))
-                    chunk = df.iloc[start_idx:end_idx]
-                    
-                    future = self.executor.submit(
-                        self._process_chunk_parallel,
-                        chunk,
-                        worksheet,
-                        start_idx + 1,
-                        self.formats
-                    )
-                    futures.append(future)
-                    
-                    if len(futures) >= self.MAX_WORKERS:
-                        # Attendi che almeno un worker finisca
-                        done, futures = concurrent.futures.wait(
-                            futures,
-                            return_when=concurrent.futures.FIRST_COMPLETED
-                        )
-                        
-                        if (start_idx + self.CHUNK_SIZE) % (self.CHUNK_SIZE * 2) == 0:
-                            log_info(f"Scritte {start_idx + self.CHUNK_SIZE} righe di {total_rows} per {sheet_name}")
-                            gc.collect()
-                
-                # Attendi il completamento di tutti i worker
-                concurrent.futures.wait(futures)
-                
-                del df
-                gc.collect()
-            
-            elapsed = time.time() - start_time
-            log_info(f"Elaborazione {sheet_name} completata in {elapsed:.2f} secondi")
-            
-        except Exception as e:
-            log_info(f"Errore durante la scrittura di {sheet_name}: {str(e)}")
-            raise
 
     def finalize(self):
         """Finalizza il file Excel unendo i file parquet"""
@@ -550,82 +482,113 @@ def export_to_excel(environment_config: Dict, output_path: str = None, environme
         timestamp = current_date.strftime("%Y%m%d_%H%M%S")
         output_path = str(year_month_path / f"export_{environment_name}_{timestamp}.xlsx")
 
+    exporter = None
     try:
         log_info(f"Inizializzazione export per ambiente {environment_name}")
         exporter = Exporter(output_path)
 
+        # Conteggio totale delle viste da elaborare
         total_views = sum(len(db_config["views"]) for db_config in environment_config)
         progress_bar = tqdm(total=total_views, desc="Progresso totale", unit="vista", file=tqdm_logger)
 
         # Prima elabora tutte le tabelle piccole
         log_info("Fase 1: Elaborazione tabelle piccole")
         for db_config in environment_config:
-            fetcher = DatabaseFetcher(db_config["config"])
-            if not fetcher.connect():
-                progress_bar.update(len(db_config["views"]))
-                continue
-
+            fetcher = None
             try:
+                fetcher = DatabaseFetcher(db_config["config"])
+                if not fetcher.connect():
+                    log_info(f"Impossibile connettersi al database {db_config['config'].get('database')}. Salto alla prossima configurazione.")
+                    progress_bar.update(len(db_config["views"]))
+                    continue
+
                 for view_name in db_config["views"]:
                     if view_name.lower() not in LARGE_TABLES:
-                        start_time = time.time()
-                        df = fetcher.fetch_view_data(view_name)
-                        
-                        if not df.empty:
-                            exporter.write_dataframe(df, view_name)
-                        
-                        elapsed_time = time.time() - start_time
-                        log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
-                        
-                        progress_bar.update(1)
-                        progress_bar.set_description(f"Completata {view_name}")
-                        
-                        # Forza pulizia memoria
-                        del df
-                        gc.collect()
+                        try:
+                            start_time = time.time()
+                            df = fetcher.fetch_view_data(view_name)
+                            
+                            if df is not None and not df.empty:
+                                exporter.write_dataframe(df, view_name)
+                                elapsed_time = time.time() - start_time
+                                log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
+                            else:
+                                log_info(f"Nessun dato da elaborare per {view_name}")
+                            
+                            progress_bar.update(1)
+                            progress_bar.set_description(f"Completata {view_name}")
+                            
+                        except Exception as e:
+                            log_info(f"Errore nell'elaborazione di {view_name}: {str(e)}")
+                            progress_bar.update(1)
+                            
+                        finally:
+                            # Forza pulizia memoria
+                            if 'df' in locals():
+                                del df
+                            gc.collect()
+                            
             finally:
-                fetcher.close()
+                if fetcher:
+                    fetcher.close()
 
         # Poi elabora le tabelle grandi
         log_info("Fase 2: Elaborazione tabelle grandi")
         for db_config in environment_config:
-            fetcher = DatabaseFetcher(db_config["config"])
-            if not fetcher.connect():
-                progress_bar.update(len(db_config["views"]))
-                continue
-
+            fetcher = None
             try:
+                fetcher = DatabaseFetcher(db_config["config"])
+                if not fetcher.connect():
+                    log_info(f"Impossibile connettersi al database {db_config['config'].get('database')}. Salto alla prossima configurazione.")
+                    progress_bar.update(len(db_config["views"]))
+                    continue
+
                 for view_name in db_config["views"]:
                     if view_name.lower() in LARGE_TABLES:
-                        start_time = time.time()
-                        df = fetcher.fetch_view_data(view_name)
-                        
-                        if not df.empty:
-                            exporter.write_dataframe(df, view_name)
-                        
-                        elapsed_time = time.time() - start_time
-                        log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
-                        
-                        progress_bar.update(1)
-                        progress_bar.set_description(f"Completata {view_name}")
-                        
-                        # Forza pulizia memoria
-                        del df
-                        gc.collect()
+                        try:
+                            start_time = time.time()
+                            df = fetcher.fetch_view_data(view_name)
+                            
+                            if df is not None and not df.empty:
+                                exporter.write_dataframe(df, view_name)
+                                elapsed_time = time.time() - start_time
+                                log_info(f"Elaborazione {view_name} completata in {elapsed_time:.2f} secondi")
+                            else:
+                                log_info(f"Nessun dato da elaborare per {view_name}")
+                            
+                            progress_bar.update(1)
+                            progress_bar.set_description(f"Completata {view_name}")
+                            
+                        except Exception as e:
+                            log_info(f"Errore nell'elaborazione di {view_name}: {str(e)}")
+                            progress_bar.update(1)
+                            
+                        finally:
+                            # Forza pulizia memoria
+                            if 'df' in locals():
+                                del df
+                            gc.collect()
+                            
             finally:
-                fetcher.close()
+                if fetcher:
+                    fetcher.close()
 
         progress_bar.close()
         
-        # Fase finale: unione dei file
-        log_info("Fase 3: Unione dei file")
+        # Fase finale: finalizzazione del file
+        log_info("Fase 3: Finalizzazione del file Excel")
         exporter.finalize()
         log_info(f"Export completato. File salvato in: {format_clickable_path(output_path)}")
         return output_path
         
-    except PermissionError as e:
-        log_info(f"Errore di permessi durante il salvataggio in {output_path}. Assicurarsi di avere i permessi necessari.")
-        raise
     except Exception as e:
         log_info(f"Errore durante l'export: {str(e)}")
         raise
+    finally:
+        # Assicurati che l'exporter venga chiuso correttamente
+        if exporter and not exporter._is_closed:
+            try:
+                exporter.finalize()
+            except:
+                pass
+        gc.collect()
