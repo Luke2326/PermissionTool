@@ -245,10 +245,11 @@ class QueryGenerator:
         formatted_output.extend([
             "    ];",
             "    i INTEGER;",
+            "    query_in_esecuzione TEXT;",
             "BEGIN",
             "    FOR i IN 1..array_length(operazioni, 1) LOOP",
             "        BEGIN",
-            "            query_in_esecuzione := operazioni[i]; -- Salviamo la query in esecuzione",
+            "            query_in_esecuzione := operazioni[i];",
             "            EXECUTE query_in_esecuzione;",
             "        EXCEPTION",
             "            WHEN OTHERS THEN",
