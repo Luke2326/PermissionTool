@@ -35,8 +35,14 @@ def generate_queries():
         # Generate queries
         print("\nGenerazione delle query in corso...")
         query_generator = QueryGenerator(data, str(excel_path), file_id)
-        query_generator.generate_all_queries()
+        if not query_generator.generate_all_queries():
+            print("\nErrore nella generazione delle query. Il file non verrà generato.")
+            return False
+            
         output_file = query_generator.save_queries()
+        if not output_file:
+            print("\nNessuna query da salvare.")
+            return False
 
         print(f"\nQuery salvate nel file: {format_clickable_path(output_file)}")
         logging.info(f"Query generate con successo nel file: {output_file}")

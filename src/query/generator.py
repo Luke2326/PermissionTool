@@ -17,30 +17,25 @@ class QueryGenerator:
     
     def generate_query(self, sheet_name: str, row: pd.Series) -> Optional[str]:
         """Generate a single query based on sheet type and row data."""
-        try:
-            if pd.isna(row['Delta']):
-                return None
-                
-            query_funcs = {
-                'Prometheus Entities': self._generate_entities_query,
-                'Prometheus Data Items': self._generate_data_items_query,
-                'Prometheus Groups': self._generate_groups_query,
-                'Prometheus Functionalities': self._generate_functionalities_query,
-                'Prometheus Permissions': self._generate_permission_query,
-                'Prometheus Roles': self._generate_roles_query,
-                'Prometheus Permission Set': self._generate_permission_set_query,
-                'Prometheus Set Role Group Ver': self._generate_set_role_group_ver_query,
-                'Prometheus File Types': self._generate_file_types_query
-            }
-            
-            query_func = query_funcs.get(sheet_name)
-            if query_func:
-                return query_func(row)
+        if pd.isna(row['Delta']):
             return None
             
-        except Exception as e:
-            logging.error(f"Errore nella generazione della query per {sheet_name}: {str(e)}")
-            return None
+        query_funcs = {
+            'Prometheus Entities': self._generate_entities_query,
+            'Prometheus Data Items': self._generate_data_items_query,
+            'Prometheus Groups': self._generate_groups_query,
+            'Prometheus Functionalities': self._generate_functionalities_query,
+            'Prometheus Permissions': self._generate_permission_query,
+            'Prometheus Roles': self._generate_roles_query,
+            'Prometheus Permission Set': self._generate_permission_set_query,
+            'Prometheus Set Role Group Ver': self._generate_set_role_group_ver_query,
+            'Prometheus File Types': self._generate_file_types_query
+        }
+        
+        query_func = query_funcs.get(sheet_name)
+        if query_func:
+            return query_func(row)
+        return None
 
     def _generate_entities_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
@@ -210,23 +205,37 @@ class QueryGenerator:
             return f"""DELETE FROM public."TBM_Permissions" WHERE "Name" = ''{row["Functionality"]}'';"""
         return None
 
-    def generate_all_queries(self) -> None:
+    def generate_all_queries(self) -> bool:
         """Generate all queries in parallel."""
+        has_errors = False
         with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = []
             for sheet_name, df in self.sheets_data.items():
-                for _, row in df.iterrows():
+                for idx, row in df.iterrows():
                     futures.append(
                         executor.submit(self.generate_query, sheet_name, row)
                     )
             
             for future in futures:
-                query = future.result()
-                if query:
-                    self.queries.append(query)
+                try:
+                    query = future.result()
+                    if query:
+                        self.queries.append(query)
+                except KeyError as e:
+                    has_errors = True
+                    logging.error(f"Errore nella generazione della query - colonna mancante: {str(e)}")
+                except Exception as e:
+                    has_errors = True
+                    logging.error(f"Errore nella generazione della query: {str(e)}")
+            
+        return not has_errors
 
-    def save_queries(self) -> str:
+    def save_queries(self) -> Optional[str]:
         """Save generated queries to a file."""
+        if not self.queries:
+            logging.warning("Nessuna query da salvare")
+            return None
+            
         formatted_output = [
             f"--Query generate da {self.file_path}",
             "BEGIN;",
