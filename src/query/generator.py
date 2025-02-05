@@ -66,13 +66,15 @@ class QueryGenerator:
     def _generate_groups_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
-            return f"""INSERT INTO public."TBM_Groups" ("Id","Name","Description","LongDescription","ExerciseTypeId")
+            return f"""INSERT INTO public."TBM_Groups" ("Id","Name","Description","LongDescription","ExerciseTypeId","Hidden","IsDeleted")
                     VALUES (
                         (select MAX("Id") + 1 from public."TBM_Groups"),
                         ''{row["Group Code"]}'',
                         ''{row["Description"]}'',
                         NULL,
-                        {exercise_id}
+                        {exercise_id},
+                        false,
+                        false
                     );
                     INSERT INTO public."TBW_GroupRootNodes" ("GroupId","EntityId","IsDeleted")
                     VALUES (
@@ -152,12 +154,13 @@ class QueryGenerator:
     def _generate_set_role_group_ver_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
-            return f"""INSERT INTO public."TBW_RolesVersions" ("ProfileSetId","ProfileSetVersionId","RoleId","GroupId")
+            return f"""INSERT INTO public."TBW_RolesVersions" ("ProfileSetId","ProfileSetVersionId","RoleId","GroupId","IsDeleted")
                     VALUES (
                         (select "ProfileSetId" from public."TBM_ProfileSetVersion" where "Description" = ''{row["Set Version Name"]}''),
                         (select "Id" from public."TBM_ProfileSetVersion" where "Description" = ''{row["Set Version Name"]}''),
                         (select "Id" from public."TBM_Roles" WHERE "Name" = ''{row["Role Unique Name"]}''),
-                        (select "Id" from public."TBM_Groups" WHERE "Name" = ''{row["Group Unique Name"]}'' and "ExerciseTypeId" = {exercise_id})
+                        (select "Id" from public."TBM_Groups" WHERE "Name" = ''{row["Group Unique Name"]}'' and "ExerciseTypeId" = {exercise_id}),
+                        false
                     )
                     ON CONFLICT ("ProfileSetId", "ProfileSetVersionId", "RoleId", "GroupId") DO NOTHING;"""
         elif row['Delta'].upper() == 'DELETE':
