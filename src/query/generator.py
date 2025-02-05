@@ -74,10 +74,11 @@ class QueryGenerator:
                         NULL,
                         {exercise_id}
                     );
-                    INSERT INTO public."TBW_GroupRootNodes" ("GroupId","EntityId")
+                    INSERT INTO public."TBW_GroupRootNodes" ("GroupId","EntityId","IsDeleted")
                     VALUES (
                         (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId"={exercise_id}),
-                        (select "Id" as EntityId from public."TBM_Entities" WHERE "Name" = ''{row["Reference Node"]}'')
+                        (select "Id" as EntityId from public."TBM_Entities" WHERE "Name" = ''{row["Reference Node"]}''),
+                        false
                     );"""
         elif row['Delta'].upper() == 'DELETE':
             exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
