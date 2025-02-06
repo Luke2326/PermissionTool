@@ -3,6 +3,7 @@ from typing import List, Dict
 # Excel sheet names
 REQUIRED_SHEETS: List[str] = [
     'Prometheus Entities',
+    'Prometheus File Types',
     'Prometheus Data Items',
     'Prometheus Groups',
     'Prometheus Functionalities',
@@ -10,7 +11,6 @@ REQUIRED_SHEETS: List[str] = [
     'Prometheus Roles',
     'Prometheus Permission Set',
     'Prometheus Set Role Group Ver',
-    'Prometheus File Types'
 ]
 
 # Exercise type mapping
