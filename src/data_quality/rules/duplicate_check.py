@@ -13,8 +13,10 @@ class DuplicateCheckRule(DQRule):
         # Mapping delle chiavi primarie per ogni sheet/vista
         self.key_mapping = {
             'Prometheus Entities': ['Entity', 'ObjectType','Entity Type','Country Code','Node Level'],
+            'Prometheus File Types': ['Name','Classification', 'DataSource', 'RiskModule', 'ValidFileExtension', 'Mandatory'],
             'Prometheus Data Items': ['Entity','File Type'],
             'Prometheus Groups': ['Exercise Type','Group Code','Reference Node','Description'],
+            'Prometheus Functionalities': ['Name','Description','DataItemsRequired'],
             'Prometheus Permissions': ['Exercise Type','Group Code','Functionality Name','Entity Name','FileType Name'],
             'Prometheus Roles': ['Role Unique Name','Role Name'],
             'Prometheus Permission Set': ['Exercise Type','ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'Set Version Name'],

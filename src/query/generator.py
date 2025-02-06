@@ -22,6 +22,7 @@ class QueryGenerator:
             
         query_funcs = {
             'Prometheus Entities': self._generate_entities_query,
+            'Prometheus File Types': self._generate_file_types_query,
             'Prometheus Data Items': self._generate_data_items_query,
             'Prometheus Groups': self._generate_groups_query,
             'Prometheus Functionalities': self._generate_functionalities_query,
@@ -29,7 +30,6 @@ class QueryGenerator:
             'Prometheus Roles': self._generate_roles_query,
             'Prometheus Permission Set': self._generate_permission_set_query,
             'Prometheus Set Role Group Ver': self._generate_set_role_group_ver_query,
-            'Prometheus File Types': self._generate_file_types_query
         }
         
         query_func = query_funcs.get(sheet_name)
@@ -175,38 +175,43 @@ class QueryGenerator:
         if row['Delta'].upper() == 'INSERT':
             mandatory = 'Y' if pd.notna(row['Mandatory']) and row['Mandatory'].upper() == 'Y' else 'N'
             mandatoryFormatted = 'true' if mandatory == 'Y' else 'false'
-            formatted_value = row["Format"].replace('|', ',')
+            formatted_value = row["ValidFileExtension"].replace('|', ',')
 
-            return f"""INSERT INTO public."TBM_FileTypes" ("Name","ClassificationId","DataSourceId","ValidFileExtension","Mandatory","RiskModuleId","IgnoreRegex")
+            return f"""INSERT INTO public."TBM_FileTypes" ("Name","ClassificationId","DataSourceId","RiskModuleId","ValidFileExtension","IgnoreRegex","Mandatory","DataQualityTopic","PushableAsDataitem","PushableAsTemplate", "PushableAsEngineOutput", "TrackingChanges")
                     VALUES (
-                        '{row["File Type"]}',
+                        ''{row["Name"]}'',
                         (SELECT "Id" FROM public."TBM_Classifications" WHERE "Name" = ''{row["Classification"]}''),
-                        (SELECT "Id" from public."TBM_DataSources" WHERE "Name" = ''{row["Data Source"]}''),
-                        '{formatted_value}',
+                        (SELECT "Id" from public."TBM_DataSources" WHERE "Name" = ''{row["DataSource"]}''),
+                        (SELECT "Id" from public."TBM_RiskModules" WHERE "Name" = ''{row["RiskModule"]}''),
+                        ''{formatted_value}'',
+                        ''n$|N$'',
                         {mandatoryFormatted},
-                        (SELECT "Id" from public."TBM_RiskModules" WHERE "Name" = ''{row["Risk Module"]}''),
-                        'n$|N$'
+                        ''dataqualitydataitemcheck'',
+                        3,
+                        0,
+                        3,
+                        0
                     );"""
         elif row['Delta'].upper() == 'DELETE':
-            return f"""DELETE FROM public."TBM_FileTypes" WHERE "Name" = ''{row["File Type"]}'';"""
+            return f"""DELETE FROM public."TBM_FileTypes" WHERE "Name" = ''{row["Name"]}'';"""
         return None
 
     def _generate_functionalities_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            data_items_required = row.get('Data Items Required', 'N')
+            data_items_required = row.get('DataItemsRequired', 'N')
             data_items_required = 'Y' if pd.notna(data_items_required) and data_items_required.upper() == 'Y' else 'N'
             value = 'true' if data_items_required == 'Y' else 'false'
             
             return f"""INSERT INTO public."TBM_Permissions" ("Name", "DataItemRequired", "Description", "Id", "Versionable") 
                     VALUES (
-                        ''{row["Functionality"]}'',
+                        ''{row["Name"]}'',
                         {value},
                         ''{row["Description"]}'',
                         (SELECT MAX("Id") + 1 FROM public."TBM_Permissions"),
                         false
                     );"""
         elif row['Delta'].upper() == 'DELETE':
-            return f"""DELETE FROM public."TBM_Permissions" WHERE "Name" = ''{row["Functionality"]}'';"""
+            return f"""DELETE FROM public."TBM_Permissions" WHERE "Name" = ''{row["Name"]}'';"""
         return None
 
     def generate_all_queries(self) -> bool:

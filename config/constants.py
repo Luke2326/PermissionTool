@@ -58,7 +58,7 @@ ENVIRONMENTS = {
                 "user": "prometheus-admin",
                 "password": "7G@},P=eoJk&Ex]i"
             },
-            "views": ["Prometheus Entities", "Prometheus Data Items"]
+            "views": ["Prometheus Entities", "Prometheus Data Items", "Prometheus File Types"]
         },
         {
             "config": {
@@ -69,7 +69,7 @@ ENVIRONMENTS = {
                 "password": "7G@},P=eoJk&Ex]i"
             },
             "views": ["Prometheus Groups", "Prometheus Permissions", "Prometheus Roles", 
-                     "Prometheus Permission Set", "Prometheus Set Role Group Ver"]
+                     "Prometheus Permission Set", "Prometheus Set Role Group Ver","Prometheus Functionalities"]
         }
     ],
     "UAT": [
@@ -81,7 +81,7 @@ ENVIRONMENTS = {
                 "user": "prometheus-admin",
                 "password": "Y!osVrO*WdDS]Mn1"
             },
-            "views": ["Prometheus Entities", "Prometheus Data Items"]
+            "views": ["Prometheus Entities", "Prometheus Data Items", "Prometheus File Types"]
         },
         {
             "config": {
@@ -92,7 +92,7 @@ ENVIRONMENTS = {
                 "password": "Y!osVrO*WdDS]Mn1"
             },
             "views": ["Prometheus Groups", "Prometheus Permissions", "Prometheus Roles", 
-                     "Prometheus Permission Set", "Prometheus Set Role Group Ver"]
+                     "Prometheus Permission Set", "Prometheus Set Role Group Ver","Prometheus Functionalities"]
         }
     ],
     "PREPROD": [
@@ -104,7 +104,7 @@ ENVIRONMENTS = {
                 "user": "prometheus-admin",
                 "password": "L>XG9T=NhVTdx9aw"
             },
-            "views": ["Prometheus Entities", "Prometheus Data Items"]
+            "views": ["Prometheus Entities", "Prometheus Data Items", "Prometheus File Types"]
         },
         {
             "config": {
@@ -115,7 +115,7 @@ ENVIRONMENTS = {
                 "password": "L>XG9T=NhVTdx9aw"
             },
             "views": ["Prometheus Groups", "Prometheus Permissions", "Prometheus Roles", 
-                     "Prometheus Permission Set", "Prometheus Set Role Group Ver"]
+                     "Prometheus Permission Set", "Prometheus Set Role Group Ver","Prometheus Functionalities"]
         }
     ],
     "PROD": [
@@ -127,7 +127,7 @@ ENVIRONMENTS = {
                 "user": "prometheus-admin",
                 "password": "bos9nJ2We}p3Rba}"
             },
-            "views": ["Prometheus Entities", "Prometheus Data Items"]
+            "views": ["Prometheus Entities", "Prometheus Data Items", "Prometheus File Types"]
         },
         {
             "config": {
@@ -138,7 +138,7 @@ ENVIRONMENTS = {
                 "password": "bos9nJ2We}p3Rba}"
             },
             "views": ["Prometheus Groups", "Prometheus Permissions", "Prometheus Roles", 
-                     "Prometheus Permission Set", "Prometheus Set Role Group Ver"]
+                     "Prometheus Permission Set", "Prometheus Set Role Group Ver","Prometheus Functionalities"]
         }
     ]
 }
