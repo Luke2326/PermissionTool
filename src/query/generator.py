@@ -177,8 +177,10 @@ class QueryGenerator:
             mandatoryFormatted = 'true' if mandatory == 'Y' else 'false'
             formatted_value = row["ValidFileExtension"].replace('|', ',')
 
-            return f"""INSERT INTO public."TBM_FileTypes" ("Name","ClassificationId","DataSourceId","RiskModuleId","ValidFileExtension","IgnoreRegex","Mandatory","DataQualityTopic","PushableAsDataitem","PushableAsTemplate", "PushableAsEngineOutput", "TrackingChanges")
+            return f"""-- DA INSERIRE MANUALMENTE ID
+                    INSERT INTO public."TBM_FileTypes" ("Id","Name","ClassificationId","DataSourceId","RiskModuleId","ValidFileExtension","IgnoreRegex","Mandatory","DataQualityTopic","PushableAsDataitem","PushableAsTemplate", "PushableAsEngineOutput", "TrackingChanges")
                     VALUES (
+                        'CONTROLLARE FILE CENSIMENTI'
                         ''{row["Name"]}'',
                         (SELECT "Id" FROM public."TBM_Classifications" WHERE "Name" = ''{row["Classification"]}''),
                         (SELECT "Id" from public."TBM_DataSources" WHERE "Name" = ''{row["DataSource"]}''),
