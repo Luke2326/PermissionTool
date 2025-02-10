@@ -7,6 +7,9 @@ import os
 from config.constants import OUTPUT_DIR, QUERY_FILE_PREFIX, EXERCISE_TYPE_MAP
 from src.utils.helpers import ensure_output_directory, generate_timestamp
 
+# Create case-insensitive version of EXERCISE_TYPE_MAP
+CASE_INSENSITIVE_EXERCISE_MAP = {k.lower(): v for k, v in EXERCISE_TYPE_MAP.items()}
+
 class QueryGenerator:
     def __init__(self, sheets_data: Dict[str, pd.DataFrame], file_path: str, id: Optional[str] = None):
         """Initialize QueryGenerator with sheets data and metadata."""
@@ -65,7 +68,7 @@ class QueryGenerator:
 
     def _generate_groups_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
+            exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
             return f"""INSERT INTO public."TBM_Groups" ("Id","Name","Description","LongDescription","ExerciseTypeId","Hidden","IsDeleted")
                     VALUES (
                         (select MAX("Id") + 1 from public."TBM_Groups"),
@@ -83,7 +86,7 @@ class QueryGenerator:
                         false
                     );"""
         elif row['Delta'].upper() == 'DELETE':
-            exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
+            exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
             return f"""DELETE FROM public."TBW_GroupRootNodes" 
                     WHERE "GroupId" = (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id});
                     DELETE FROM public."TBW_RolesVersions" 
@@ -98,7 +101,7 @@ class QueryGenerator:
 
     def _generate_permission_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
+            exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
             file_type_condition = f"(SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['FileType Name']}'')" if pd.notna(row['FileType Name']) else "0"
             entity_condition = f"(SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity Name']}'')" if pd.notna(row['Entity Name']) else "0"
             
@@ -113,7 +116,7 @@ class QueryGenerator:
                     )
                     ON CONFLICT ("GroupId", "PermissionId", "FileTypeId", "EntityId") DO NOTHING;"""
         elif row['Delta'].upper() == 'DELETE':
-            exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
+            exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
             file_type_condition = f"AND \"FileTypeId\" = (SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['FileType Name']}'')" if pd.notna(row['FileType Name']) else ""
             entity_condition = f"AND \"EntityId\" = (SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity Name']}'')" if pd.notna(row['Entity Name']) else ""
             
@@ -134,7 +137,7 @@ class QueryGenerator:
 
     def _generate_permission_set_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
+            exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
             return f"""INSERT INTO public."TBM_ProfileSet" ("Name","ExerciseTypeId")
                     VALUES (''{row["ProfileSetName"]}'',{exercise_id});
                     INSERT INTO public."TBM_ProfileSetVersion" ("ProfileSetId","Name","Description","Version")
@@ -153,7 +156,7 @@ class QueryGenerator:
 
     def _generate_set_role_group_ver_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            exercise_id = EXERCISE_TYPE_MAP.get(row["Exercise Type"], row["Exercise Type"])
+            exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
             return f"""INSERT INTO public."TBW_RolesVersions" ("ProfileSetId","ProfileSetVersionId","RoleId","GroupId","IsDeleted")
                     VALUES (
                         (select "ProfileSetId" from public."TBM_ProfileSetVersion" where "Description" = ''{row["Set Version Name"]}''),
