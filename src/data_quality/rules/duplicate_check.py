@@ -48,12 +48,25 @@ class DuplicateCheckRule(DQRule):
             
             # Verifica ogni riga da inserire
             for idx, row in insert_rows.iterrows():
-                match_condition = True
-                for key in key_columns:
-                    if key in row and key in db_df:
-                        match_condition &= (db_df[key] == row[key])
+                matches = pd.Series([True] * len(db_df), index=db_df.index)
                 
-                if match_condition.any():
+                for key in key_columns:
+                    if key not in row or key not in db_df:
+                        continue
+                        
+                    excel_value = row[key]
+                    db_values = db_df[key]
+                    
+                    # Gestione valori nulli
+                    if pd.isna(excel_value):
+                        matches &= pd.isna(db_values)
+                    else:
+                        # Converti a stringa per gestire tipi diversi
+                        excel_str = str(excel_value).strip()
+                        db_str = db_values.astype(str).str.strip()
+                        matches &= (db_str == excel_str)
+                
+                if matches.any():
                     has_errors = True
                     # Crea un dizionario con i valori delle chiavi
                     error_details = {
