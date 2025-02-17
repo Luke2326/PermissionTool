@@ -37,6 +37,19 @@ EXERCISE_TYPE_MAP: Dict[str, int] = {
     "Third Party Risk": 10
 }
 
+# Mapping delle chiavi primarie per il controllo dei duplicati
+KEY_MAPPING = {
+    'Prometheus Entities': ['Entity', 'ObjectType','Entity Type','Country Code','Node Level'],
+    'Prometheus File Types': ['Name','Classification', 'DataSource', 'RiskModule', 'ValidFileExtension', 'Mandatory'],
+    'Prometheus Data Items': ['Entity','File Type'],
+    'Prometheus Groups': ['Exercise Type','Group Code','Reference Node','Description'],
+    'Prometheus Functionalities': ['Name','Description','DataItemsRequired'],
+    'Prometheus Permissions': ['Exercise Type','Group Code','Functionality Name','Entity Name','FileType Name'],
+    'Prometheus Roles': ['Role Unique Name','Role Name'],
+    'Prometheus Permission Set': ['Exercise Type','ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'Set Version Name'],
+    'Prometheus Set Role Group Ver': ['Exercise Type','Set Version Name','Role Unique Name','Group Unique Name']
+}
+
 # Excel configuration
 EXCEL_ENGINE = 'pyxlsb'
 DEFAULT_DTYPE = {

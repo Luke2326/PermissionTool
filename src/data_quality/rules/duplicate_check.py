@@ -1,6 +1,7 @@
 from typing import Dict, List
 import pandas as pd
 from ..base import DQRule
+from config.constants import KEY_MAPPING
 
 class DuplicateCheckRule(DQRule):
     """Regola che verifica la presenza di duplicati tra Excel e DB"""
@@ -10,18 +11,7 @@ class DuplicateCheckRule(DQRule):
             name="DuplicateCheck",
             description="Verifica la presenza di record già esistenti nel database"
         )
-        # Mapping delle chiavi primarie per ogni sheet/vista
-        self.key_mapping = {
-            'Prometheus Entities': ['Entity', 'ObjectType','Entity Type','Country Code','Node Level'],
-            'Prometheus File Types': ['Name','Classification', 'DataSource', 'RiskModule'],
-            'Prometheus Data Items': ['Entity','File Type'],
-            'Prometheus Groups': ['Exercise Type','Group Code','Reference Node','Description'],
-            'Prometheus Functionalities': ['Name','Description','DataItemsRequired'],
-            'Prometheus Permissions': ['Exercise Type','Group Code','Functionality Name','Entity Name','FileType Name'],
-            'Prometheus Roles': ['Role Unique Name','Role Name'],
-            'Prometheus Permission Set': ['Exercise Type','ProfileSetName', 'ProfileSetVersionName', 'Version Number', 'Set Version Name'],
-            'Prometheus Set Role Group Ver': ['Exercise Type','Set Version Name','Role Unique Name','Group Unique Name']
-        }
+        self.key_mapping = KEY_MAPPING
     
     def validate(self, excel_data: Dict[str, pd.DataFrame], db_data: Dict[str, pd.DataFrame]) -> bool:
         """

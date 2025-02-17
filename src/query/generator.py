@@ -223,24 +223,24 @@ class QueryGenerator:
         """Generate all queries in parallel."""
         has_errors = False
         with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-            futures = []
+            # Manteniamo traccia dello sheet_name insieme al future
+            futures_with_context = []
             for sheet_name, df in self.sheets_data.items():
                 for idx, row in df.iterrows():
-                    futures.append(
-                        executor.submit(self.generate_query, sheet_name, row)
-                    )
+                    future = executor.submit(self.generate_query, sheet_name, row)
+                    futures_with_context.append((future, sheet_name, idx))
             
-            for future in futures:
+            for future, sheet_name, idx in futures_with_context:
                 try:
                     query = future.result()
                     if query:
                         self.queries.append(query)
                 except KeyError as e:
                     has_errors = True
-                    logging.error(f"Errore nella generazione della query - colonna mancante: {str(e)}")
+                    logging.error(f"Errore nella generazione della query - Sheet: {sheet_name}, Riga: {idx + 2}, Colonna mancante: {str(e)}")
                 except Exception as e:
                     has_errors = True
-                    logging.error(f"Errore nella generazione della query: {str(e)}")
+                    logging.error(f"Errore generico nella generazione della query - Sheet: {sheet_name}, Riga: {idx + 2}: {str(e)}")
             
         return not has_errors
 
