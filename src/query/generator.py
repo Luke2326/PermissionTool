@@ -42,92 +42,184 @@ class QueryGenerator:
 
     def _generate_entities_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            return f"""INSERT INTO public."TBM_Entities" ("Id","Name", "EntityTypeId", "CountryId", "NodeLevelId","ObjectType") 
-                    VALUES (
-                        (select MAX("Id") + 1 from public."TBM_Entities"),
+            return f"""WITH entity_data AS (
+                        SELECT MAX("Id") + 1 as new_id FROM public."TBM_Entities"
+                    ),
+                    entity_type AS (
+                        SELECT "Id" FROM public."TBM_EntityTypes" WHERE "Name" = ''{row["Entity Type"]}''
+                    ),
+                    country AS (
+                        SELECT "Id" FROM public."TBM_Countries" where "Description" = ''{row["Country Code"]}''
+                    ),
+                    node_level AS (
+                        SELECT "Id" FROM public."TBM_NodeLevels" WHERE "Name" = ''{row["Node Level"]}''
+                    )
+                    INSERT INTO public."TBM_Entities" ("Id","Name", "EntityTypeId", "CountryId", "NodeLevelId","ObjectType") 
+                    SELECT 
+                        entity_data.new_id,
                         ''{row["Entity"]}'',
-                        (SELECT "Id" FROM public."TBM_EntityTypes" WHERE "Name" = ''{row["Entity Type"]}''),
-                        (SELECT "Id" FROM public."TBM_Countries" where "Description" = ''{row["Country Code"]}''),
-                        (SELECT "Id" FROM public."TBM_NodeLevels" WHERE "Name" = ''{row["Node Level"]}''),
+                        entity_type."Id",
+                        country."Id",
+                        node_level."Id",
                         1
-                    );"""
+                    FROM 
+                        entity_data, entity_type, country, node_level;"""
         return None
 
     def _generate_data_items_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
-            return f"""INSERT INTO public."TBM_FileTypeEntities" ("EntityId", "FileTypeId") 
-                    VALUES (
-                        (SELECT "Id" FROM public."TBM_Entities" WHERE "Name" = ''{row["Entity"]}''),
-                        (SELECT "Id" FROM public."TBM_FileTypes" WHERE "Name" = ''{row["File Type"]}'')
-                    );"""
+            return f"""WITH entity AS (
+                        SELECT "Id" FROM public."TBM_Entities" WHERE "Name" = ''{row["Entity"]}''
+                    ),
+                    file_type AS (
+                        SELECT "Id" FROM public."TBM_FileTypes" WHERE "Name" = ''{row["File Type"]}''
+                    )
+                    INSERT INTO public."TBM_FileTypeEntities" ("EntityId", "FileTypeId") 
+                    SELECT entity."Id", file_type."Id"
+                    FROM entity, file_type;"""
         elif row['Delta'].upper() == 'DELETE':
-            return f"""DELETE FROM public."TBM_FileTypeEntities" 
-                    WHERE "EntityId" = (SELECT "Id" FROM public."TBM_Entities" WHERE "Name" = ''{row["Entity"]}'')
-                    AND "FileTypeId" = (SELECT "Id" FROM public."TBM_FileTypes" WHERE "Name" = ''{row["File Type"]}'');"""
+            return f"""WITH entity AS (
+                        SELECT "Id" FROM public."TBM_Entities" WHERE "Name" = ''{row["Entity"]}''
+                    ),
+                    file_type AS (
+                        SELECT "Id" FROM public."TBM_FileTypes" WHERE "Name" = ''{row["File Type"]}''
+                    )
+                    DELETE FROM public."TBM_FileTypeEntities" 
+                    WHERE "EntityId" IN (SELECT "Id" FROM entity)
+                    AND "FileTypeId" IN (SELECT "Id" FROM file_type);"""
         return None
 
     def _generate_groups_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
-            return f"""INSERT INTO public."TBM_Groups" ("Id","Name","Description","LongDescription","ExerciseTypeId","Hidden","IsDeleted")
-                    VALUES (
-                        (select MAX("Id") + 1 from public."TBM_Groups"),
-                        ''{row["Group Code"]}'',
-                        ''{row["Description"]}'',
-                        NULL,
-                        {exercise_id},
-                        false,
-                        false
-                    );
+            return f"""WITH new_group AS (
+                        INSERT INTO public."TBM_Groups" ("Id","Name","Description","LongDescription","ExerciseTypeId","Hidden","IsDeleted")
+                        VALUES (
+                            (select MAX("Id") + 1 from public."TBM_Groups"),
+                            ''{row["Group Code"]}'',
+                            ''{row["Description"]}'',
+                            NULL,
+                            {exercise_id},
+                            false,
+                            false
+                        )
+                        RETURNING "Id"
+                    ),
+                    entity AS (
+                        SELECT "Id" FROM public."TBM_Entities" WHERE "Name" = ''{row["Reference Node"]}''
+                    )
                     INSERT INTO public."TBW_GroupRootNodes" ("GroupId","EntityId","IsDeleted")
-                    VALUES (
-                        (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId"={exercise_id}),
-                        (select "Id" as EntityId from public."TBM_Entities" WHERE "Name" = ''{row["Reference Node"]}''),
-                        false
-                    );"""
+                    SELECT new_group."Id", entity."Id", false
+                    FROM new_group, entity;"""
         elif row['Delta'].upper() == 'DELETE':
             exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
-            return f"""DELETE FROM public."TBW_GroupRootNodes" 
-                    WHERE "GroupId" = (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id});
-                    DELETE FROM public."TBW_RolesVersions" 
-                    WHERE "GroupId" = (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id});
-                    DELETE FROM public."TBW_NodeVisibilities" 
-                    WHERE "GroupId" = (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id});
-                    DELETE FROM public."TBM_Profiles" 
-                    WHERE "GroupId" = (SELECT "Id" FROM public."TBM_Groups" WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id});
-                    DELETE FROM public."TBM_Groups" 
-                    WHERE "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id};"""
+            return f"""WITH target_group AS (
+                        SELECT "Id" FROM public."TBM_Groups" 
+                        WHERE "Name" = ''{row["Group Code"]}'' AND "ExerciseTypeId" = {exercise_id}
+                    )
+                    DELETE FROM public."TBW_GroupRootNodes" WHERE "GroupId" IN (SELECT "Id" FROM target_group);
+                    DELETE FROM public."TBW_RolesVersions" WHERE "GroupId" IN (SELECT "Id" FROM target_group);
+                    DELETE FROM public."TBW_NodeVisibilities" WHERE "GroupId" IN (SELECT "Id" FROM target_group);
+                    DELETE FROM public."TBM_Profiles" WHERE "GroupId" IN (SELECT "Id" FROM target_group);
+                    DELETE FROM public."TBM_Groups" WHERE "Id" IN (SELECT "Id" FROM target_group);"""
         return None
 
     def _generate_permission_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
-            file_type_condition = f"(SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['FileType Name']}'')" if pd.notna(row['FileType Name']) else "0"
-            entity_condition = f"(SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity Name']}'')" if pd.notna(row['Entity Name']) else "0"
             
-            return f"""INSERT INTO public."TBM_Profiles" ("ExerciseTypeId","FileTypeId","EntityId","PermissionId","GroupId","IsDeleted")
-                    VALUES (
-                        {exercise_id},
-                        {file_type_condition},
-                        {entity_condition},
-                        (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality Name"]}''),
-                        (SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id}),
-                        false
-                    )
+            cte_parts = ["WITH"]
+            select_parts = []
+            from_parts = []
+            
+            # Always include permission and group CTEs
+            cte_parts.append(f"""
+                permission AS (
+                    SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality Name"]}''
+                ),
+                group_data AS (
+                    SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id}
+                )""")
+            
+            select_parts.extend([f"{exercise_id}", "permission.\"Id\"", "group_data.\"Id\""])
+            from_parts.extend(["permission", "group_data"])
+            
+            # Conditionally include file_type and entity CTEs
+            if pd.notna(row['FileType Name']):
+                cte_parts.append(f"""
+                    file_type AS (
+                        SELECT "Id" FROM "TBM_FileTypes" WHERE "Name" = ''{row['FileType Name']}''
+                    )""")
+                select_parts.append("file_type.\"Id\"")
+                from_parts.append("file_type")
+            else:
+                select_parts.append("0")
+            
+            if pd.notna(row['Entity Name']):
+                cte_parts.append(f"""
+                    entity AS (
+                        SELECT "Id" FROM "TBM_Entities" WHERE "Name" = ''{row['Entity Name']}''
+                    )""")
+                select_parts.append("entity.\"Id\"")
+                from_parts.append("entity")
+            else:
+                select_parts.append("0")
+            
+            # Combine all parts into the final query
+            final_cte = " ".join(cte_parts)
+            final_select = ", ".join(select_parts)
+            final_from = ", ".join(from_parts)
+            
+            return f"""{final_cte}
+                    INSERT INTO public."TBM_Profiles" ("ExerciseTypeId","PermissionId","GroupId","FileTypeId","EntityId","IsDeleted")
+                    SELECT {final_select}, false
+                    FROM {final_from}
                     ON CONFLICT ("GroupId", "PermissionId", "FileTypeId", "EntityId") DO NOTHING;"""
         elif row['Delta'].upper() == 'DELETE':
             exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
-            file_type_condition = f"AND \"FileTypeId\" = (SELECT \"Id\" FROM \"TBM_FileTypes\" WHERE \"Name\" = ''{row['FileType Name']}'')" if pd.notna(row['FileType Name']) else ""
-            entity_condition = f"AND \"EntityId\" = (SELECT \"Id\" FROM \"TBM_Entities\" WHERE \"Name\" = ''{row['Entity Name']}'')" if pd.notna(row['Entity Name']) else ""
             
-            return f"""DELETE FROM public."TBM_Profiles" 
-                    WHERE "GroupId" = (SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id})
-                    {entity_condition}
-                    {file_type_condition}
-                    AND "PermissionId" = (SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality Name"]}'');"""
+            cte_parts = ["WITH"]
+            where_conditions = [
+                f"\"ExerciseTypeId\" = {exercise_id}",
+                "\"PermissionId\" IN (SELECT \"Id\" FROM permission)",
+                "\"GroupId\" IN (SELECT \"Id\" FROM group_data)"
+            ]
+            
+            # Always include permission and group CTEs
+            cte_parts.append(f"""
+                permission AS (
+                    SELECT "Id" FROM "TBM_Permissions" WHERE "Name" = ''{row["Functionality Name"]}''
+                ),
+                group_data AS (
+                    SELECT "Id" FROM "TBM_Groups" where "Name" = ''{row["Group Code"]}'' and "ExerciseTypeId" = {exercise_id}
+                )""")
+            
+            # Conditionally include file_type and entity CTEs and conditions
+            if pd.notna(row['FileType Name']):
+                cte_parts.append(f"""
+                    file_type AS (
+                        SELECT "Id" FROM "TBM_FileTypes" WHERE "Name" = ''{row['FileType Name']}''
+                    )""")
+                where_conditions.append("\"FileTypeId\" IN (SELECT \"Id\" FROM file_type)")
+            
+            if pd.notna(row['Entity Name']):
+                cte_parts.append(f"""
+                    entity AS (
+                        SELECT "Id" FROM "TBM_Entities" WHERE "Name" = ''{row['Entity Name']}''
+                    )""")
+                where_conditions.append("\"EntityId\" IN (SELECT \"Id\" FROM entity)")
+            
+            # Combine all parts into the final query
+            final_cte = " ".join(cte_parts)
+            final_where = " AND ".join(where_conditions)
+            
+            return f"""{final_cte}
+                    DELETE FROM public."TBM_Profiles" 
+                    WHERE {final_where};"""
         return None
 
     def _generate_roles_query(self, row: pd.Series) -> Optional[str]:
+        # This query is already simple, but we'll keep the pattern consistent
         if row['Delta'].upper() == 'INSERT':
             return f"""INSERT INTO public."TBM_Roles" ("Name","Description")
                     VALUES (''{row["Role Unique Name"]}'',''{row["Role Name"]}'');"""
@@ -138,40 +230,80 @@ class QueryGenerator:
     def _generate_permission_set_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
-            return f"""INSERT INTO public."TBM_ProfileSet" ("Name","ExerciseTypeId")
-                    VALUES (''{row["ProfileSetName"]}'',{exercise_id});
+            return f"""WITH new_profile_set AS (
+                        INSERT INTO public."TBM_ProfileSet" ("Name","ExerciseTypeId")
+                        VALUES (''{row["ProfileSetName"]}'',{exercise_id})
+                        RETURNING "Id"
+                    )
                     INSERT INTO public."TBM_ProfileSetVersion" ("ProfileSetId","Name","Description","Version")
-                    VALUES (
-                        (select "Id" from public."TBM_ProfileSet" WHERE "Name" = ''{row["ProfileSetName"]}''),
+                    SELECT 
+                        new_profile_set."Id",
                         ''{row["ProfileSetVersionName"]}'',
                         ''{row["Set Version Name"]}'',
                         ''{row["Version Number"]}''
-                    );"""
+                    FROM new_profile_set;"""
         elif row['Delta'].upper() == 'DELETE':
-            return f"""DELETE FROM public."TBM_ProfileSetVersion" 
+            return f"""WITH profile_set_version AS (
+                        SELECT "ProfileSetId" 
+                        FROM public."TBM_ProfileSetVersion" 
+                        WHERE "Description" = ''{row["Set Version Name"]}''
+                    )
+                    DELETE FROM public."TBM_ProfileSetVersion" 
                     WHERE "Description" = ''{row["Set Version Name"]}'';
+                    
                     DELETE FROM public."TBM_ProfileSet"
-                    WHERE "Name" = ''{row["ProfileSetName"]}'';"""
+                    WHERE "Id" IN (SELECT "ProfileSetId" FROM profile_set_version);"""
         return None
 
     def _generate_set_role_group_ver_query(self, row: pd.Series) -> Optional[str]:
         if row['Delta'].upper() == 'INSERT':
             exercise_id = CASE_INSENSITIVE_EXERCISE_MAP.get(row["Exercise Type"].lower(), row["Exercise Type"])
-            return f"""INSERT INTO public."TBW_RolesVersions" ("ProfileSetId","ProfileSetVersionId","RoleId","GroupId","IsDeleted")
-                    VALUES (
-                        (select "ProfileSetId" from public."TBM_ProfileSetVersion" where "Description" = ''{row["Set Version Name"]}''),
-                        (select "Id" from public."TBM_ProfileSetVersion" where "Description" = ''{row["Set Version Name"]}''),
-                        (select "Id" from public."TBM_Roles" WHERE "Name" = ''{row["Role Unique Name"]}''),
-                        (select "Id" from public."TBM_Groups" WHERE "Name" = ''{row["Group Unique Name"]}'' and "ExerciseTypeId" = {exercise_id}),
-                        false
+            return f"""WITH profile_set_version AS (
+                        SELECT "Id", "ProfileSetId"
+                        FROM public."TBM_ProfileSetVersion" 
+                        WHERE "Description" = ''{row["Set Version Name"]}''
+                    ),
+                    role_data AS (
+                        SELECT "Id" 
+                        FROM public."TBM_Roles" 
+                        WHERE "Name" = ''{row["Role Unique Name"]}''
+                    ),
+                    group_data AS (
+                        SELECT "Id" 
+                        FROM public."TBM_Groups" 
+                        WHERE "Name" = ''{row["Group Unique Name"]}'' AND "ExerciseTypeId" = {exercise_id}
                     )
+                    INSERT INTO public."TBW_RolesVersions" ("ProfileSetId","ProfileSetVersionId","RoleId","GroupId","IsDeleted")
+                    SELECT 
+                        profile_set_version."ProfileSetId",
+                        profile_set_version."Id",
+                        role_data."Id",
+                        group_data."Id",
+                        false
+                    FROM 
+                        profile_set_version, role_data, group_data
                     ON CONFLICT ("ProfileSetId", "ProfileSetVersionId", "RoleId", "GroupId") DO NOTHING;"""
         elif row['Delta'].upper() == 'DELETE':
-            return f"""UPDATE public."TBW_RolesVersions"
+            return f"""WITH profile_set_version AS (
+                        SELECT "Id" 
+                        FROM public."TBM_ProfileSetVersion" 
+                        WHERE "Description" = ''{row["Set Version Name"]}''
+                    ),
+                    role_data AS (
+                        SELECT "Id" 
+                        FROM public."TBM_Roles" 
+                        WHERE "Name" = ''{row["Role Unique Name"]}''
+                    ),
+                    group_data AS (
+                        SELECT "Id" 
+                        FROM public."TBM_Groups" 
+                        WHERE "Name" = ''{row["Group Unique Name"]}''
+                    )
+                    UPDATE public."TBW_RolesVersions"
                     SET "IsDeleted" = true
-                    WHERE "ProfileSetVersionId" = (select "Id" from public."TBM_ProfileSetVersion" where "Description" = ''{row["Set Version Name"]}'')
-                    AND "RoleId" = (select "Id" from public."TBM_Roles" WHERE "Name" = ''{row["Role Unique Name"]}'')
-                    AND "GroupId" = (select "Id" from public."TBM_Groups" WHERE "Name" = ''{row["Group Unique Name"]}'');"""
+                    WHERE "ProfileSetVersionId" IN (SELECT "Id" FROM profile_set_version)
+                    AND "RoleId" IN (SELECT "Id" FROM role_data)
+                    AND "GroupId" IN (SELECT "Id" FROM group_data);"""
         return None
 
     def _generate_file_types_query(self, row: pd.Series) -> Optional[str]:
@@ -180,14 +312,23 @@ class QueryGenerator:
             mandatoryFormatted = 'true' if mandatory == 'Y' else 'false'
             formatted_value = row["ValidFileExtension"].replace('|', ',')
 
-            return f"""-- DA INSERIRE MANUALMENTE ID
+            return f"""WITH classification AS (
+                        SELECT "Id" FROM public."TBM_Classifications" WHERE "Name" = ''{row["Classification"]}''
+                    ),
+                    data_source AS (
+                        SELECT "Id" FROM public."TBM_DataSources" WHERE "Name" = ''{row["DataSource"]}''
+                    ),
+                    risk_module AS (
+                        SELECT "Id" FROM public."TBM_RiskModules" WHERE "Name" = ''{row["RiskModule"]}''
+                    )
+                    -- DA INSERIRE MANUALMENTE ID
                     INSERT INTO public."TBM_FileTypes" ("Id","Name","ClassificationId","DataSourceId","RiskModuleId","ValidFileExtension","IgnoreRegex","Mandatory","DataQualityTopic","PushableAsDataitem","PushableAsTemplate", "PushableAsEngineOutput", "TrackingChanges")
-                    VALUES (
-                        'CONTROLLARE FILE CENSIMENTI'
+                    SELECT
+                        'CONTROLLARE FILE CENSIMENTI',
                         ''{row["Name"]}'',
-                        (SELECT "Id" FROM public."TBM_Classifications" WHERE "Name" = ''{row["Classification"]}''),
-                        (SELECT "Id" from public."TBM_DataSources" WHERE "Name" = ''{row["DataSource"]}''),
-                        (SELECT "Id" from public."TBM_RiskModules" WHERE "Name" = ''{row["RiskModule"]}''),
+                        classification."Id",
+                        data_source."Id",
+                        risk_module."Id",
                         ''{formatted_value}'',
                         ''n$|N$'',
                         {mandatoryFormatted},
@@ -196,7 +337,8 @@ class QueryGenerator:
                         0,
                         3,
                         0
-                    );"""
+                    FROM
+                        classification, data_source, risk_module;"""
         elif row['Delta'].upper() == 'DELETE':
             return f"""DELETE FROM public."TBM_FileTypes" WHERE "Name" = ''{row["Name"]}'';"""
         return None
@@ -207,14 +349,17 @@ class QueryGenerator:
             data_items_required = 'Y' if pd.notna(data_items_required) and data_items_required.upper() == 'Y' else 'N'
             value = 'true' if data_items_required == 'Y' else 'false'
             
-            return f"""INSERT INTO public."TBM_Permissions" ("Name", "DataItemRequired", "Description", "Id", "Versionable") 
-                    VALUES (
+            return f"""WITH max_id AS (
+                        SELECT MAX("Id") + 1 AS new_id FROM public."TBM_Permissions"
+                    )
+                    INSERT INTO public."TBM_Permissions" ("Name", "DataItemRequired", "Description", "Id", "Versionable") 
+                    SELECT
                         ''{row["Name"]}'',
                         {value},
                         ''{row["Description"]}'',
-                        (SELECT MAX("Id") + 1 FROM public."TBM_Permissions"),
+                        max_id.new_id,
                         false
-                    );"""
+                    FROM max_id;"""
         elif row['Delta'].upper() == 'DELETE':
             return f"""DELETE FROM public."TBM_Permissions" WHERE "Name" = ''{row["Name"]}'';"""
         return None
