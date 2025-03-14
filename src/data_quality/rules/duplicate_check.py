@@ -2,6 +2,7 @@ from typing import Dict, List
 import pandas as pd
 import time
 import logging
+import re
 from ..base import DQRule
 from config.constants import KEY_MAPPING
 
@@ -138,6 +139,20 @@ class DuplicateCheckRule(DQRule):
         has_errors = False
         total_rows = len(insert_rows)
         
+        # Pre-converti le colonne del DB per evitare conversioni ripetute
+        db_df_converted = {}
+        for key in key_columns:
+            if key in db_df.columns:
+                try:
+                    # Converti solo se necessario
+                    if db_df[key].dtype != 'object':
+                        db_df_converted[key] = db_df[key].astype(str).str.strip()
+                    else:
+                        db_df_converted[key] = db_df[key].str.strip()
+                except Exception as e:
+                    logging.warning(f"Errore nella pre-conversione della colonna {key}: {str(e)}")
+                    # Fallback: non pre-convertire questa colonna
+        
         # Processa le righe Excel in chunk
         for chunk_start in range(0, total_rows, self.chunk_size):
             chunk_end = min(chunk_start + self.chunk_size, total_rows)
@@ -145,81 +160,52 @@ class DuplicateCheckRule(DQRule):
             
             logging.info(f"Processando chunk {chunk_start}-{chunk_end} di {total_rows} righe")
             
-            # Crea un indice ottimizzato sul DB per le colonne chiave
-            # Questo è più efficiente per grandi dataset
+            # Processa ogni riga nel chunk
             for idx, row in chunk.iterrows():
-                # Costruisci una query per filtrare il DB
-                query = None
+                # Inizializza una maschera booleana per tutte le righe del DB
+                matches = pd.Series([True] * len(db_df), index=db_df.index)
                 
+                # Applica il filtro per ogni colonna chiave
                 for key in key_columns:
                     if key not in row or key not in db_df.columns:
                         continue
-                        
+                    
                     excel_value = row[key]
                     
+                    # Gestione valori nulli
                     if pd.isna(excel_value):
-                        key_query = f"{key}.isna()"
+                        matches &= pd.isna(db_df[key])
                     else:
                         excel_str = str(excel_value).strip()
-                        key_query = f"({key}.astype(str).str.strip() == '{excel_str}')"
-                    
-                    if query is None:
-                        query = key_query
-                    else:
-                        query += f" & {key_query}"
-                
-                # Se non è possibile costruire una query valida, salta
-                if query is None:
-                    continue
-                
-                try:
-                    # Esegui la query sul DB
-                    matches = db_df.query(query, engine='python')
-                    
-                    if not matches.empty:
-                        has_errors = True
-                        # Crea un dizionario con i valori delle chiavi
-                        error_details = {
-                            'sheet_name': sheet_name,
-                            'row_index': idx + 2,  # +2 per compensare l'header e l'indice 0-based
-                        }
                         
-                        # Aggiungi i valori delle chiavi come campi separati
-                        for key in key_columns:
-                            if key in row:
-                                error_details[key] = row[key]
-                        
-                        self.errors.append(error_details)
-                except Exception as e:
-                    logging.error(f"Errore durante la query: {str(e)}")
-                    # Fallback al metodo tradizionale per questa riga
-                    matches = pd.Series([True] * len(db_df), index=db_df.index)
-                    
-                    for key in key_columns:
-                        if key not in row or key not in db_df.columns:
-                            continue
-                            
-                        excel_value = row[key]
-                        db_values = db_df[key]
-                        
-                        if pd.isna(excel_value):
-                            matches &= pd.isna(db_values)
+                        # Usa i valori pre-convertiti se disponibili
+                        if key in db_df_converted:
+                            matches &= (db_df_converted[key] == excel_str)
                         else:
-                            excel_str = str(excel_value).strip()
+                            # Fallback al metodo tradizionale
+                            db_values = db_df[key]
                             db_str = db_values.astype(str).str.strip()
                             matches &= (db_str == excel_str)
+                
+                # Verifica se ci sono corrispondenze
+                if matches.any():
+                    has_errors = True
+                    # Crea un dizionario con i valori delle chiavi
+                    error_details = {
+                        'sheet_name': sheet_name,
+                        'row_index': idx + 2,  # +2 per compensare l'header e l'indice 0-based
+                    }
                     
-                    if matches.any():
-                        has_errors = True
-                        error_details = {
-                            'sheet_name': sheet_name,
-                            'row_index': idx + 2,
-                        }
-                        
-                        for key in key_columns:
-                            if key in row:
-                                error_details[key] = row[key]
-                        
-                        self.errors.append(error_details)
+                    # Aggiungi i valori delle chiavi come campi separati
+                    for key in key_columns:
+                        if key in row:
+                            error_details[key] = row[key]
+                    
+                    self.errors.append(error_details)
+                
+                # Libera memoria ogni 100 righe
+                if idx % 100 == 0:
+                    import gc
+                    gc.collect()
         
         return has_errors
