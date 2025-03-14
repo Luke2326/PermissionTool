@@ -64,7 +64,7 @@ class DuplicateCheckRule(DQRule):
                 continue
             
             # Filtra il DB in base agli ExerciseType presenti nelle righe da inserire
-            if 'ExerciseType' in insert_rows.columns and 'ExerciseType' in db_df.columns:
+            if 'Exercise Type' in insert_rows.columns and 'Exercise Type' in db_df.columns:
                 unique_exercise_types = insert_rows['ExerciseType'].dropna().unique()
                 if len(unique_exercise_types) > 0:
                     logging.info(f"Filtraggio DB per ExerciseType: trovati {len(unique_exercise_types)} tipi unici")
@@ -75,7 +75,7 @@ class DuplicateCheckRule(DQRule):
                     
                     # Filtra il DataFrame del DB per includere solo le righe con gli ExerciseType corrispondenti
                     original_db_size = len(db_df)
-                    db_df = db_df[db_df['ExerciseType'].astype(str).str.strip().isin(unique_exercise_types_str)]
+                    db_df = db_df[db_df['Exercise Type'].astype(str).str.strip().isin(unique_exercise_types_str)]
                     filtered_db_size = len(db_df)
                     
                     reduction_percentage = ((original_db_size - filtered_db_size) / original_db_size * 100) if original_db_size > 0 else 0
