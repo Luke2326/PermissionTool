@@ -65,10 +65,10 @@ class DuplicateCheckRule(DQRule):
             
             # Filtra il DB in base agli ExerciseType presenti nelle righe da inserire
             if 'Exercise Type' in insert_rows.columns and 'Exercise Type' in db_df.columns:
-                unique_exercise_types = insert_rows['ExerciseType'].dropna().unique()
+                unique_exercise_types = insert_rows['Exercise Type'].dropna().unique()
                 if len(unique_exercise_types) > 0:
-                    logging.info(f"Filtraggio DB per ExerciseType: trovati {len(unique_exercise_types)} tipi unici")
-                    print(f"Filtraggio DB per ExerciseType: {len(unique_exercise_types)} tipi unici")
+                    logging.info(f"Filtraggio DB per Exercise Type: trovati {len(unique_exercise_types)} tipi unici")
+                    print(f"Filtraggio DB per Exercise Type: {len(unique_exercise_types)} tipi unici")
                     
                     # Converti i valori a stringa per garantire la compatibilità
                     unique_exercise_types_str = [str(et).strip() for et in unique_exercise_types if not pd.isna(et)]
