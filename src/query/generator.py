@@ -3,9 +3,10 @@ import pandas as pd
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import os
+from datetime import datetime
 
-from config.constants import OUTPUT_DIR, QUERY_FILE_PREFIX, EXERCISE_TYPE_MAP
-from src.utils.helpers import ensure_output_directory, generate_timestamp
+from config.constants import OUTPUT_DIR, QUERY_FILE_PREFIX, EXERCISE_TYPE_MAP, ENVIRONMENTS
+from src.utils.helpers import ensure_output_directory, generate_timestamp, extract_excel_filename, get_next_version
 
 # Create case-insensitive version of EXERCISE_TYPE_MAP
 CASE_INSENSITIVE_EXERCISE_MAP = {k.lower(): v for k, v in EXERCISE_TYPE_MAP.items()}
@@ -244,54 +245,141 @@ class QueryGenerator:
             
         return not has_errors
 
-    def save_queries(self) -> Optional[str]:
-        """Save generated queries to a file."""
-        if not self.queries:
-            logging.warning("Nessuna query da salvare")
-            return None
+    def save_queries(self, executed_by: Optional[str] = None) -> List[str]:
+        """
+        Save generated queries to multiple files, one for each environment.
+        
+        Args:
+            executed_by: Nome della persona che esegue lo script
             
-        formatted_output = [
-            f"--Query generate da {self.file_path}",
-            "BEGIN;",
-            "",
-            "DO $$",
-            "DECLARE",
-            "    operazioni TEXT[] := ARRAY["
-        ]
-        
-        for i, query in enumerate(self.queries):
-            if i < len(self.queries) - 1:
-                formatted_output.append(f"        '{query}',\n")
-            else:
-                formatted_output.append(f"        '{query}'")
-        
-        formatted_output.extend([
-            "    ];",
-            "    i INTEGER;",
-            "    query_in_esecuzione TEXT;",
-            "BEGIN",
-            "    FOR i IN 1..array_length(operazioni, 1) LOOP",
-            "        BEGIN",
-            "            query_in_esecuzione := operazioni[i];",
-            "            EXECUTE query_in_esecuzione;",
-            "        EXCEPTION",
-            "            WHEN OTHERS THEN",
-            "                RAISE NOTICE 'Errore nell''operazione %: %', i, SQLERRM;",
-            "                RAISE NOTICE 'Query che ha causato l''errore: %', query_in_esecuzione;",
-            "        END;",
-            "    END LOOP;",
-            "END $$;",
-            "",
-            "ROLLBACK;",
-            "--COMMIT;"
-        ])
+        Returns:
+            List[str]: List of paths to the generated SQL files
+        """
+        if not self.queries:
+            logging.warning("Nessuna query da salvare.")
+            return []
         
         output_dir = ensure_output_directory(OUTPUT_DIR)
-        timestamp = generate_timestamp()
-        filename = f'{QUERY_FILE_PREFIX}_{self.id}_{timestamp}.sql' if self.id else f'{QUERY_FILE_PREFIX}_{timestamp}.sql'
-        output_file = os.path.join(output_dir, filename)
+        date_str = generate_timestamp()
         
-        with open(output_file, 'w') as f:
-            f.write("\n".join(formatted_output))
+        # Estrai il nome del file Excel senza estensione
+        excel_filename = extract_excel_filename(self.file_path)
         
-        return output_file
+        # Rimuovi l'ID dal nome del file se è già presente nel formato [ID]
+        if self.id and f"[{self.id}]" in excel_filename:
+            # L'ID è già nel nome del file, usa il nome così com'è
+            base_filename = excel_filename
+        elif self.id:
+            # Aggiungi l'ID al nome del file
+            base_filename = f"[{self.id}] {excel_filename}"
+        else:
+            # Nessun ID disponibile
+            base_filename = excel_filename
+        
+        output_files = []
+        
+        # Genera un file per ogni ambiente
+        for env_name, env_config in ENVIRONMENTS.items():
+            # Ottieni l'indirizzo IP dell'ambiente (primo host trovato)
+            env_ip = env_config[0]["config"]["host"]
+            
+            # Format queries with transaction control
+            formatted_output = []
+            formatted_output.extend([
+                "-- Script generato automaticamente",
+                f"-- Data generazione: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"-- File di origine: {os.path.basename(self.file_path)}",
+                f"-- Ambiente: {env_name}",
+                "",
+                "DO $$",
+                "DECLARE",
+                "    current_ip TEXT;",
+                "    expected_ip TEXT := '" + env_ip + "';",
+                "BEGIN",
+                "    -- Ottieni l'IP del server corrente",
+                "    SELECT inet_server_addr()::TEXT INTO current_ip;",
+                "",
+                "    -- Verifica che l'IP corrisponda all'ambiente designato",
+                "    IF NOT current_ip LIKE expected_ip || '%' THEN",
+                "        RAISE EXCEPTION 'Errore: Lo script non sta venendo eseguito nell''ambiente corretto: " + env_name + " (%).',",
+                "                        expected_ip;",
+                "    END IF;",
+                "END $$;",
+                "",
+                "BEGIN;",
+                "",
+                "-- Variabili per il tracciamento dell'esecuzione",
+                "DO $$",
+                "DECLARE",
+                "    v_start_time TIMESTAMP := clock_timestamp();",
+                "    v_operation_count INT := 0;",
+                "    v_log_id INT;",
+                "    v_file_name TEXT := '" + os.path.basename(excel_filename) + "';",
+                "    v_executed_by TEXT := '" + (executed_by or 'Unknown') + "';",
+                "    v_execution_duration INTERVAL;",
+                "    operazioni TEXT[] := ARRAY["
+            ])
+            
+            # Formatta le query come array di stringhe
+            for i, query in enumerate(self.queries):
+                if i < len(self.queries) - 1:
+                    formatted_output.append(f"        '{query}',")
+                else:
+                    formatted_output.append(f"        '{query}'")
+            
+            formatted_output.extend([
+                "    ];",
+                "    i INTEGER;",
+                "    query_in_esecuzione TEXT;",
+                "BEGIN",
+                "    -- Esegui le operazioni",
+                "    FOR i IN 1..array_length(operazioni, 1) LOOP",
+                "        BEGIN",
+                "            query_in_esecuzione := operazioni[i];",
+                "            EXECUTE query_in_esecuzione;",
+                "            v_operation_count := v_operation_count + 1;",
+                "        EXCEPTION",
+                "            WHEN OTHERS THEN",
+                "                RAISE NOTICE 'Errore nell''operazione %: %', i, SQLERRM;",
+                "                RAISE NOTICE 'Query che ha causato l''errore: %', query_in_esecuzione;",
+                "        END;",
+                "    END LOOP;",
+                "",
+                "    -- Calcola la durata dell'esecuzione",
+                "    v_execution_duration := clock_timestamp() - v_start_time;",
+                "",
+                "    -- Registra le informazioni di esecuzione nella tabella TBW_ServiceRequestLog",
+                "    -- Questa parte viene eseguita solo quando si fa COMMIT",
+                "    IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'TBW_ServiceRequestLog') THEN",
+                "        INSERT INTO public.\"TBW_ServiceRequestLog\" (\"FileName\", \"ExecutedBy\", \"ExecutionDate\", \"ExecutionDuration\", \"OperationCount\")",
+                "        VALUES (v_file_name, v_executed_by, clock_timestamp(), v_execution_duration, v_operation_count)",
+                "        RETURNING \"Id\" INTO v_log_id;",
+                "",
+                "        RAISE NOTICE 'Esecuzione registrata con ID: %', v_log_id;",
+                "        RAISE NOTICE 'Operazioni eseguite: %', v_operation_count;",
+                "        RAISE NOTICE 'Durata esecuzione: %', v_execution_duration;",
+                "    ELSE",
+                "        RAISE NOTICE 'Tabella TBW_ServiceRequestLog non trovata. Le informazioni di esecuzione non sono state registrate.';",
+                "    END IF;",
+                "END $$;",
+                "",
+                "ROLLBACK;",
+                "-- Per eseguire le operazioni, rimuovere il commento dalla riga seguente e commentare la riga ROLLBACK sopra",
+                "--COMMIT;"
+            ])
+            
+            # Ottieni la prossima versione disponibile
+            env_base_filename = f"[{self.id}][{env_name}] {excel_filename}" if self.id else f"[{env_name}] {excel_filename}"
+            version = get_next_version(output_dir, env_base_filename, date_str)
+            
+            # Crea il nome completo del file
+            filename = f"{env_base_filename} {date_str} {version}.sql"
+            output_file = os.path.join(output_dir, filename)
+            
+            with open(output_file, 'w') as f:
+                f.write("\n".join(formatted_output))
+            
+            output_files.append(output_file)
+            logging.info(f"File SQL generato per l'ambiente {env_name}: {output_file}")
+        
+        return output_files

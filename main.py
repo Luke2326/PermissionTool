@@ -8,6 +8,7 @@ from src.utils.helpers import setup_logging, validate_file_path, extract_id_from
 from src.data_quality.validator import DataQualityValidator
 from src.data_quality.rules.duplicate_check import DuplicateCheckRule
 from config.constants import ENVIRONMENTS, OUTPUT_DIR
+import os
 
 def generate_queries():
     """Funzione per generare le query SQL da un file Excel"""
@@ -36,16 +37,26 @@ def generate_queries():
         print("\nGenerazione delle query in corso...")
         query_generator = QueryGenerator(data, str(excel_path), file_id)
         if not query_generator.generate_all_queries():
-            print("\nErrore nella generazione delle query. Il file non verrà generato.")
+            print("\nErrore nella generazione delle query. I file non verranno generati.")
             return False
+        
+        # Chiedi il nome della persona che esegue lo script
+        executed_by = input("\nInserisci il nome della persona che eseguirà lo script: ")
+        if not executed_by.strip():
+            executed_by = os.getenv('USERNAME', 'Unknown')
+            print(f"Nessun nome inserito, verrà utilizzato il nome utente del sistema: {executed_by}")
             
-        output_file = query_generator.save_queries()
-        if not output_file:
+        output_files = query_generator.save_queries(executed_by)
+        if not output_files:
             print("\nNessuna query da salvare.")
             return False
 
-        print(f"\nQuery salvate nel file: {format_clickable_path(output_file)}")
-        logging.info(f"Query generate con successo nel file: {output_file}")
+        print(f"\nQuery generate con successo per i seguenti ambienti:")
+        for output_file in output_files:
+            env_name = os.path.basename(output_file).split(']')[1].strip('[')
+            print(f"- Ambiente {env_name}: {format_clickable_path(output_file)}")
+        
+        logging.info(f"Query generate con successo in {len(output_files)} file")
         return True
         
     except Exception as e:
